@@ -27,5 +27,8 @@ Eyes/screenshots/*
 .DS_Store
 Thumbs.db
 *.swp
-*.swo
 .vscode/
+token.txt
+*token*
+*.key
+*.pem
