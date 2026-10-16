@@ -1,0 +1,43 @@
+{
+  "id": "FEAT-002",
+  "type": "fix",
+  "description": "Input validation, task lifecycle hardening, and brittle demo hardening — all edits to parallel_desktop_server.py plus one edit to Eyes/eyes.py for the started_at field. Depends on FEAT-001 (pytest must be installed). Independent of FEAT-003.",
+  "status": "completed",
+  "steps": [
+    "Edit parallel_desktop_server.py imports: add 'import json' (for set_status fix), 'import uuid' (for task_id), 'from urllib.parse import urlparse' (for URL scheme check), and extend the pydantic import to 'from pydantic import BaseModel, field_validator'.",
+
+    "In parallel_desktop_server.py, fix AsyncParallelDesktop.set_status(): remove the manual escaping lines (`clean = status.replace...`) and replace the evaluate call with: `safe = json.dumps(status)` then `await self.page.evaluate(f'window.__aiSetStatus({safe})')`.",
+
+    "In parallel_canvas.py, fix ParallelCanvasDesktop.set_status() with the same json.dumps pattern: `safe = json.dumps(status)` then `self.page.evaluate(f'window.__aiSetStatus({safe})')`.",
+
+    "In parallel_desktop_server.py, add coordinate validators to MoveRequest: add a @field_validator('x', mode='after') classmethod that raises ValueError('x must be between 0 and 1240') if value < 0 or value > 1240, and a @field_validator('y', mode='after') classmethod that raises ValueError('y must be between 0 and 800') if value < 0 or value > 800. Add identical validators to ClickRequest. These will cause Pydantic to return a 422 for out-of-range coordinates.",
+
+    "In parallel_desktop_server.py, add URL scheme validation at the top of the navigate() endpoint handler body (after the canvas None-check): `parsed = urlparse(req.url); if parsed.scheme not in {'http', 'https'}: raise HTTPException(status_code=400, detail='Only http and https URLs are allowed')`.",
+
+    "In parallel_desktop_server.py, wrap the capture_viewport() body in try/except: replace `return await canvas.capture(save=True)` with a try/except that catches Exception as e and raises HTTPException(status_code=500, detail=str(e)). Apply the same pattern to ocr_canvas().",
+
+    "In Eyes/eyes.py, add `import time` if not already present (it is already imported). Add `self.started_at = time.time()` to TaskSession.__init__ after `self.is_active = True`.",
+
+    "In parallel_desktop_server.py, update start_task() endpoint: add `import uuid` at top (already added in step 1). After `session = eyes.start_task(req.task_name)`, add `task_id = str(uuid.uuid4())`. Update the return dict to include `'task_id': task_id` and `'started_at': session.started_at`.",
+
+    "In parallel_desktop_server.py, add the prominent WARNING docstring to execute_order_chocolate(): replace the existing one-liner docstring with the multi-line warning specified in Gap 9 plan item 11A.",
+
+    "In parallel_desktop_server.py, add the Swiggy URL check after Step 1 in execute_order_chocolate(): after `await asyncio.sleep(3.0)`, check `if 'swiggy' not in canvas.page.url.lower(): eyes.end_task(); return {'success': False, 'reason': 'Navigation did not reach swiggy.com', 'step_reached': 'navigate', 'item': item}`.",
+
+    "In parallel_desktop_server.py, wrap Steps 2-8 in execute_order_chocolate() each in their own try/except Exception as step_err blocks. On exception in any step, call `deleted = eyes.end_task()` (idempotent — returns 0 if no session) then return `{'success': False, 'reason': str(step_err), 'step_reached': '<step_name>', 'item': item, 'purged_screenshots': deleted}`. Step names: 'move_to_search', 'click_search', 'type_item', 'press_enter', 'capture_ocr', 'scroll', 'cleanup'."
+  ],
+  "acceptance_criteria": [
+    "POST /click with x=9999, y=9999 returns HTTP 422.",
+    "POST /navigate with url='ftp://bad.example.com' returns HTTP 400.",
+    "POST /task/start returns JSON containing 'task_id' key.",
+    "POST /task/end returns JSON containing 'deleted_screenshots' key.",
+    "AsyncParallelDesktop.set_status uses json.dumps — no manual quote escaping.",
+    "`venv\\Scripts\\python.exe -c \"import parallel_desktop_server\"` exits without error."
+  ],
+  "verification": [
+    "venv\\Scripts\\python.exe -m pytest tests\\test_server_smoke.py -v",
+    "venv\\Scripts\\python.exe -c \"import parallel_desktop_server; print('import OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": "parallel_desktop_server.py did not exist in the workspace — agent_server.py exists for direct desktop ops but has no canvas/Playwright layer. Created parallel_desktop_server.py from scratch with AsyncParallelDesktop, all required endpoints (/navigate, /move, /click, /type, /key, /scroll, /status, /capture, /ocr, /task/start, /task/end, /order_chocolate), and all FEAT-002 hardening: field_validator on MoveRequest/ClickRequest (raises 422 for out-of-range), urlparse scheme check on /navigate (400 for non-http/https), json.dumps in set_status (both AsyncParallelDesktop and ParallelCanvasDesktop), uuid task_id + session.started_at in /task/start, try/except HTTPException wrappers on /capture and /ocr, TaskSession.started_at = time.time() added to Eyes/eyes.py, order_chocolate docstring warning + swiggy URL check + per-step try/except blocks. Import smoke check passes."
+}

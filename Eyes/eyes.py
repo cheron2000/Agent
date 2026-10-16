@@ -63,6 +63,7 @@ class TaskSession:
         self.task_name = task_name
         self.screenshots: List[str] = []
         self.is_active = True
+        self.started_at = time.time()
 
     def add_screenshot(self, path: str):
         if path and path not in self.screenshots:

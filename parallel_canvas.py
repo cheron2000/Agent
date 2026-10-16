@@ -7,6 +7,7 @@ Architecture:
 - Ephemeral Lifecycle: All screenshots captured during a task are automatically deleted when the task completes.
 """
 
+import json
 import os
 import sys
 import time
@@ -306,8 +307,8 @@ class ParallelCanvasDesktop:
         if not self.page:
             return
         try:
-            clean = status.replace("'", "\\'").replace('"', '\\"')
-            self.page.evaluate(f"window.__aiSetStatus('{clean}')")
+            safe = json.dumps(status)
+            self.page.evaluate(f"window.__aiSetStatus({safe})")
         except Exception:
             pass
 
