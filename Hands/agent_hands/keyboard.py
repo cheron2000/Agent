@@ -5,6 +5,8 @@ from typing import List, Optional, Union
 import pyautogui
 import pyperclip
 
+from .windows import ensure_interactive_desktop
+
 # Keyboard operations should not trigger mouse-corner fail-safe
 pyautogui.FAILSAFE = False
 
@@ -36,6 +38,7 @@ def normalize_key_name(key: str) -> str:
 
 def press_single_key(key: str, dwell_time: float = 0.05) -> None:
     """Press and release a single key with realistic dwell duration."""
+    ensure_interactive_desktop()
     k = normalize_key_name(key)
     pyautogui.keyDown(k)
     time.sleep(dwell_time)
@@ -58,6 +61,7 @@ def execute_hotkey(keys: Union[List[str], str], step_delay: float = 0.04) -> Non
     Example: ['ctrl', 'shift', 'p'] or 'ctrl+c'
     Presses keys in order, holds them, then releases in reverse order.
     """
+    ensure_interactive_desktop()
     if isinstance(keys, str):
         # Split by '+' or '-' or space
         raw_keys = [k.strip() for k in keys.replace("+", " ").replace("-", " ").split()]

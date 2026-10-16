@@ -1,0 +1,7 @@
+{
+  "task_id": "task-desktop-agent-bugfix",
+  "task_description": "Fix 9 documented gaps in the Windows desktop AI agent: dependency drift, input validation, task lifecycle, stale canvas bounds, missing scripts stub, print-to-logging migration, legacy canvas annotation, smoke tests, and brittle demo endpoint.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null
+}

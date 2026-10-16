@@ -4,7 +4,7 @@ import time
 from typing import Any, Dict, Optional, Tuple, Union
 import pyautogui
 
-from .windows import focus_window
+from .windows import ensure_interactive_desktop, focus_window
 
 # Disable PyAutoGUI corner fail-safe to prevent crashes when cursor is parked at (0, 0)
 pyautogui.FAILSAFE = False
@@ -43,6 +43,7 @@ def _clamp_to_bounds(x: int, y: int) -> Tuple[int, int]:
 
 def get_mouse_position() -> Tuple[int, int]:
     """Get the current cursor (x, y) coordinates on screen."""
+    ensure_interactive_desktop()
     pos = pyautogui.position()
     return (int(pos.x), int(pos.y))
 
@@ -65,6 +66,7 @@ def move_to(
     Returns:
         Dictionary with status, coordinates, and error details if any.
     """
+    ensure_interactive_desktop()
     if window_title:
         focus_window(window_title)
         time.sleep(0.2)
@@ -105,6 +107,7 @@ def click(
     Returns:
         Dictionary with click details and outcome.
     """
+    ensure_interactive_desktop()
     if window_title:
         focus_window(window_title)
         time.sleep(0.2)

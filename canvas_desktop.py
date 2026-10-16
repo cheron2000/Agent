@@ -1,345 +1,279 @@
-"""canvas_desktop.py - Native AI Desktop Canvas Window (PyQt6).
+"""canvas_desktop.py — PyQt6 native desktop canvas window for the AI agent.
 
-A dedicated, isolated desktop workspace canvas designed exclusively for AI control:
-- High-resolution bordered canvas with real-time AI status HUD.
-- Full Chromium engine (QWebEngineView) embedded directly inside the canvas.
-- Strict spatial bounding: Eyes & Hands operate strictly within this canvas viewport.
-- Ephemeral lifecycle: Screenshots are tracked during task execution and auto-deleted upon task end.
+Runs as a standalone process:  python canvas_desktop.py [url]
+
+The window is a QMainWindow containing a full Chromium browser (QWebEngineView)
+plus a status HUD.  On every move/resize/show event the window writes its exact
+global screen coordinates into canvas_state.json so ai_controller.py can read
+the live bounds without any IPC server.  A 1-second background timer keeps the
+file fresh while the window is visible.
 """
 
 import json
 import os
 import sys
 import time
-from typing import Optional, Tuple
+import logging
 
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-from PyQt6.QtCore import QPoint, QTimer, QUrl, pyqtSignal, QObject
-from PyQt6.QtWebEngineCore import QWebEngineSettings
-from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWidgets import (
-    QApplication,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMainWindow,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
+CANVAS_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "canvas_state.json")
+
+# ---------------------------------------------------------------------------
+# Module-level logger
+# ---------------------------------------------------------------------------
+
+_log_formatter = logging.Formatter("%(asctime)s %(levelname)s [canvas_desktop] %(message)s")
+
+_file_handler = logging.FileHandler(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "canvas_debug.log"),
+    encoding="utf-8",
 )
+_file_handler.setFormatter(_log_formatter)
 
-CANVAS_STATE_FILE = os.path.join(os.path.dirname(__file__), "canvas_state.json")
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_log_formatter)
 
-
-class CanvasSignals(QObject):
-    navigate = pyqtSignal(str)
-    set_status = pyqtSignal(str, str)  # (state, message)
-    focus_window = pyqtSignal()
-
-
-class AIDesktopCanvas(QMainWindow):
-    """Native AI-controlled Desktop Workspace Canvas."""
-
-    def __init__(self, initial_url: str = "https://chatgpt.com", width: int = 1280, height: int = 820):
-        super().__init__()
-        self.setWindowTitle("🤖 AI Desktop Workspace — [AI Controlled Canvas]")
-        self.resize(width, height)
-        self.setMinimumSize(800, 600)
-
-        self.signals = CanvasSignals()
-        self.signals.navigate.connect(self._do_navigate)
-        self.signals.set_status.connect(self._do_set_status)
-        self.signals.focus_window.connect(self._do_focus)
-
-        self._build_ui(initial_url)
-        self._setup_style()
-
-        # Thread-safe periodic state sync on Qt main event loop
-        self.state_timer = QTimer(self)
-        self.state_timer.timeout.connect(self.update_state_file)
-        self.state_timer.start(1000)
-
-    def _build_ui(self, initial_url: str):
-        central = QWidget(self)
-        self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-
-        # ── Top AI Control Bar (HUD) ─────────────────────────────────────────
-        self.hud_frame = QFrame()
-        self.hud_frame.setObjectName("hudFrame")
-        hud_layout = QHBoxLayout(self.hud_frame)
-        hud_layout.setContentsMargins(12, 6, 12, 6)
-        hud_layout.setSpacing(12)
-
-        # Badge
-        self.badge = QLabel("● AI CONTROL ACTIVE")
-        self.badge.setObjectName("badgeActive")
-        hud_layout.addWidget(self.badge)
-
-        # Status text
-        self.status_label = QLabel("🟢 IDLE — Ready for AI task")
-        self.status_label.setObjectName("statusLabel")
-        hud_layout.addWidget(self.status_label, 1)
-
-        # Bounds monitor
-        self.bounds_label = QLabel("Viewport: Calculating...")
-        self.bounds_label.setObjectName("boundsLabel")
-        hud_layout.addWidget(self.bounds_label)
-
-        # Ephemeral storage badge
-        self.ephemeral_label = QLabel("📸 Ephemeral Storage [Auto-Purge]")
-        self.ephemeral_label.setObjectName("ephemeralLabel")
-        hud_layout.addWidget(self.ephemeral_label)
-
-        layout.addWidget(self.hud_frame)
-
-        # ── Address Bar / Navigation Controls ────────────────────────────────
-        nav_frame = QFrame()
-        nav_frame.setObjectName("navFrame")
-        nav_layout = QHBoxLayout(nav_frame)
-        nav_layout.setContentsMargins(8, 4, 8, 4)
-        nav_layout.setSpacing(8)
-
-        self.url_input = QLineEdit(initial_url)
-        self.url_input.setObjectName("urlInput")
-        self.url_input.returnPressed.connect(self._on_url_submitted)
-        nav_layout.addWidget(self.url_input, 1)
-
-        btn_go = QPushButton("Go")
-        btn_go.setObjectName("navBtn")
-        btn_go.clicked.connect(self._on_url_submitted)
-        nav_layout.addWidget(btn_go)
-
-        btn_refresh = QPushButton("↻")
-        btn_refresh.setObjectName("navBtn")
-        btn_refresh.clicked.connect(self._reload_page)
-        nav_layout.addWidget(btn_refresh)
-
-        layout.addWidget(nav_frame)
-
-        # ── Embedded Canvas Viewport (Chromium Engine) ──────────────────────
-        self.canvas_container = QFrame()
-        self.canvas_container.setObjectName("canvasContainer")
-        container_layout = QVBoxLayout(self.canvas_container)
-        container_layout.setContentsMargins(4, 4, 4, 4)
-
-        self.web_view = QWebEngineView()
-        self.web_view.setObjectName("webView")
-
-        # Configure custom browser settings
-        profile = self.web_view.page().profile()
-        profile.setHttpUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        )
-        settings = self.web_view.settings()
-        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
-
-        self.web_view.load(QUrl(initial_url))
-        self.web_view.urlChanged.connect(lambda qurl: self.url_input.setText(qurl.toString()))
-
-        container_layout.addWidget(self.web_view)
-        layout.addWidget(self.canvas_container, 1)
-
-    def _setup_style(self):
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #0b0f19;
-            }
-            #hudFrame {
-                background-color: #111827;
-                border: 1px solid #1f2937;
-                border-radius: 6px;
-            }
-            #badgeActive {
-                color: #00d2ff;
-                font-weight: bold;
-                font-size: 11px;
-                background-color: rgba(0, 210, 255, 0.15);
-                padding: 4px 8px;
-                border-radius: 4px;
-                border: 1px solid rgba(0, 210, 255, 0.4);
-            }
-            #statusLabel {
-                color: #e5e7eb;
-                font-weight: 500;
-                font-size: 12px;
-            }
-            #boundsLabel {
-                color: #9ca3af;
-                font-family: Consolas, monospace;
-                font-size: 11px;
-                background-color: #1f2937;
-                padding: 3px 6px;
-                border-radius: 4px;
-            }
-            #ephemeralLabel {
-                color: #10b981;
-                font-size: 11px;
-                font-weight: 500;
-                background-color: rgba(16, 185, 129, 0.12);
-                padding: 3px 6px;
-                border-radius: 4px;
-                border: 1px solid rgba(16, 185, 129, 0.3);
-            }
-            #navFrame {
-                background-color: #111827;
-                border: 1px solid #1f2937;
-                border-radius: 6px;
-            }
-            #urlInput {
-                background-color: #0d1117;
-                color: #f3f4f6;
-                border: 1px solid #374151;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-size: 12px;
-            }
-            #navBtn {
-                background-color: #1f2937;
-                color: #e5e7eb;
-                border: 1px solid #374151;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-size: 12px;
-            }
-            #navBtn:hover {
-                background-color: #374151;
-                color: #ffffff;
-            }
-            #canvasContainer {
-                background-color: #0d1117;
-                border: 2px solid #00d2ff;
-                border-radius: 6px;
-            }
-        """)
-
-    def get_viewport_bounds(self) -> Tuple[int, int, int, int]:
-        """Calculate exact global screen coordinates (x, y, width, height) of the canvas viewport."""
-        global_top_left = self.web_view.mapToGlobal(QPoint(0, 0))
-        x = int(global_top_left.x())
-        y = int(global_top_left.y())
-        w = int(self.web_view.width())
-        h = int(self.web_view.height())
-        return (x, y, w, h)
-
-    def update_state_file(self):
-        """Save current canvas bounds to state file so Eyes and Hands can bind immediately."""
-        bounds = self.get_viewport_bounds()
-        self.bounds_label.setText(f"Canvas: {bounds[2]}x{bounds[3]} at ({bounds[0]}, {bounds[1]})")
-        try:
-            hwnd_val = str(int(self.winId()))
-        except Exception:
-            hwnd_val = str(self.winId())
-        data = {
-            "bounds": list(bounds),
-            "width": bounds[2],
-            "height": bounds[3],
-            "x": bounds[0],
-            "y": bounds[1],
-            "hwnd": hwnd_val,
-            "timestamp": time.time(),
-        }
-        try:
-            with open(CANVAS_STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except Exception:
-            pass
-
-    def moveEvent(self, event):
-        super().moveEvent(event)
-        self.update_state_file()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.update_state_file()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.update_state_file()
-
-    def _on_url_submitted(self):
-        url = self.url_input.text().strip()
-        if not url.startswith("http://") and not url.startswith("https://"):
-            url = "https://" + url
-        self.web_view.load(QUrl(url))
-
-    def _reload_page(self):
-        self.web_view.reload()
-
-    def _do_navigate(self, url: str):
-        if not url.startswith("http://") and not url.startswith("https://"):
-            url = "https://" + url
-        self.url_input.setText(url)
-        self.web_view.load(QUrl(url))
-
-    def _do_set_status(self, state: str, message: str):
-        icons = {
-            "idle": "🟢 IDLE",
-            "perceiving": "🔵 EYES PERCEIVING",
-            "executing": "🟠 HANDS EXECUTING",
-            "transcribing": "🟣 OCR TRANSCRIBING",
-            "complete": "✅ TASK COMPLETE",
-        }
-        icon_str = icons.get(state.lower(), "● AI ACTIVE")
-        self.status_label.setText(f"{icon_str} — {message}")
-
-    def _do_focus(self):
-        self.activateWindow()
-        self.raise_()
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.addHandler(_file_handler)
+logger.addHandler(_console_handler)
 
 
-# ── Global Controller Functions ───────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# IPC helper — read canvas bounds written by the running canvas window
+# ---------------------------------------------------------------------------
 
-def get_canvas_bounds() -> Optional[Tuple[int, int, int, int]]:
-    """Retrieve the current active AI canvas boundaries from the shared state file."""
-    if os.path.exists(CANVAS_STATE_FILE):
-        try:
-            with open(CANVAS_STATE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                b = data.get("bounds")
-                if b and len(b) == 4:
-                    return tuple(b)
-        except Exception:
-            pass
-    return None
+def get_canvas_bounds() -> tuple:
+    """Return the current canvas viewport bounds as (x, y, width, height).
 
+    Raises:
+        RuntimeError: If canvas_state.json does not exist, cannot be parsed,
+                      or is missing the 'bounds' key or has an invalid value.
 
-def ensure_default_desktop():
-    """Ensure the window is rendered on the interactive Default desktop so the user sees it."""
+    Logs a warning if the state file is more than 5 seconds old (stale).
+    """
+    if not os.path.exists(CANVAS_STATE_FILE):
+        raise RuntimeError("canvas_state.json not found; is canvas_desktop.py running?")
+
     try:
-        import ctypes
-        hDesk = ctypes.windll.user32.OpenDesktopW("Default", 0, False, 0x01FF)
-        if hDesk:
-            ctypes.windll.user32.SetThreadDesktop(hDesk)
-            print("[Canvas Desktop] Attached to interactive User Desktop (Default).")
+        with open(CANVAS_STATE_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
     except Exception as e:
-        print(f"[Canvas Desktop] Desktop attach note: {e}")
+        raise RuntimeError(f"Failed to read canvas_state.json: {e}") from e
+
+    if "bounds" not in data:
+        raise RuntimeError("canvas_state.json is missing the 'bounds' key")
+
+    age = time.time() - data.get("timestamp", 0)
+    if age > 5.0:
+        logger.warning(
+            "canvas_state.json is stale (%.1fs old); bounds may be inaccurate", age
+        )
+
+    b = data["bounds"]
+    if not b or len(b) != 4:
+        raise RuntimeError("canvas_state.json bounds value is invalid")
+
+    return tuple(b)
 
 
-def run_canvas_app(initial_url: str = "https://www.swiggy.com/instamart", width: int = 1280, height: int = 820):
-    """Launch the AI Desktop Canvas application."""
-    ensure_default_desktop()
-    app = QApplication.instance()
-    if not app:
-        app = QApplication(sys.argv)
+# ---------------------------------------------------------------------------
+# Attempt GUI launch only when PyQt6 is available
+# ---------------------------------------------------------------------------
 
-    window = AIDesktopCanvas(initial_url=initial_url, width=width, height=height)
+try:
+    from PyQt6.QtCore import QTimer, QUrl, Qt
+    from PyQt6.QtWidgets import (
+        QApplication,
+        QHBoxLayout,
+        QLabel,
+        QLineEdit,
+        QMainWindow,
+        QPushButton,
+        QStatusBar,
+        QVBoxLayout,
+        QWidget,
+    )
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+
+    _PYQT6_AVAILABLE = True
+except ImportError:
+    _PYQT6_AVAILABLE = False
+    logger.warning("PyQt6 / QWebEngineWidgets not available — GUI will not launch")
+
+
+# ---------------------------------------------------------------------------
+# Default desktop home page
+# ---------------------------------------------------------------------------
+
+def ensure_default_desktop() -> str:
+    """Return the URL for the default home page, creating the file if absent."""
+    home = os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktop_home.html")
+    if os.path.exists(home):
+        logger.info("Using existing desktop_home.html: %s", home)
+        return home
+
+    logger.info("desktop_home.html not found — creating default placeholder")
+    html = (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<title>AI Desktop Canvas</title></head>"
+        "<body style='margin:0;background:#0f172a;color:#e2e8f0;"
+        "font-family:system-ui,sans-serif;display:flex;"
+        "align-items:center;justify-content:center;height:100vh;'>"
+        "<div style='text-align:center'>"
+        "<h1 style='color:#00d2ff;font-size:2rem;'>AI Desktop Canvas</h1>"
+        "<p>Ready — navigate to any URL using the address bar above.</p>"
+        "</div></body></html>"
+    )
+    try:
+        with open(home, "w", encoding="utf-8") as fh:
+            fh.write(html)
+        logger.info("Created desktop_home.html at: %s", home)
+    except OSError as exc:
+        logger.warning("Could not write desktop_home.html: %s", exc)
+    return home
+
+
+# ---------------------------------------------------------------------------
+# PyQt6 canvas window
+# ---------------------------------------------------------------------------
+
+if _PYQT6_AVAILABLE:
+
+    class AIDesktopCanvas(QMainWindow):
+        """PyQt6 window that embeds a Chromium browser and writes live bounds to canvas_state.json."""
+
+        DEFAULT_WIDTH = 1260
+        DEFAULT_HEIGHT = 800
+
+        def __init__(self, initial_url: str = "about:blank"):
+            super().__init__()
+            self.setWindowTitle("AI Desktop Canvas")
+            self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
+
+            # Central widget + layout
+            central = QWidget()
+            self.setCentralWidget(central)
+            layout = QVBoxLayout(central)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+
+            # Navigation bar
+            nav_bar = QWidget()
+            nav_layout = QHBoxLayout(nav_bar)
+            nav_layout.setContentsMargins(4, 4, 4, 4)
+
+            self._url_input = QLineEdit()
+            self._url_input.setPlaceholderText("Enter URL and press Enter…")
+            self._url_input.returnPressed.connect(self._on_navigate)
+            nav_layout.addWidget(self._url_input)
+
+            back_btn = QPushButton("←")
+            back_btn.setFixedWidth(30)
+            back_btn.clicked.connect(lambda: self._view.back())
+            nav_layout.addWidget(back_btn)
+
+            fwd_btn = QPushButton("→")
+            fwd_btn.setFixedWidth(30)
+            fwd_btn.clicked.connect(lambda: self._view.forward())
+            nav_layout.addWidget(fwd_btn)
+
+            layout.addWidget(nav_bar)
+
+            # Web view
+            self._view = QWebEngineView()
+            layout.addWidget(self._view)
+
+            # Status bar HUD
+            self._status_bar = QStatusBar()
+            self.setStatusBar(self._status_bar)
+            self._bounds_label = QLabel("bounds: …")
+            self._status_bar.addPermanentWidget(self._bounds_label)
+
+            # Load initial URL
+            self._view.load(QUrl(initial_url))
+            self._view.urlChanged.connect(self._on_url_changed)
+
+            # Refresh timer — write state every 1 second
+            self._timer = QTimer(self)
+            self._timer.timeout.connect(self._write_state)
+            self._timer.start(1000)
+
+        # ------------------------------------------------------------------
+        def _write_state(self):
+            """Write current window geometry to canvas_state.json."""
+            try:
+                geom = self.geometry()
+                pos = self.mapToGlobal(self._view.pos())
+                vw = self._view.width()
+                vh = self._view.height()
+                bounds = [pos.x(), pos.y(), vw, vh]
+                state = {
+                    "bounds": bounds,
+                    "hwnd": int(self.winId()),
+                    "timestamp": time.time(),
+                }
+                with open(CANVAS_STATE_FILE, "w", encoding="utf-8") as fh:
+                    json.dump(state, fh)
+                self._bounds_label.setText(
+                    f"bounds: ({pos.x()},{pos.y()}) {vw}×{vh}"
+                )
+            except Exception as exc:
+                logger.warning("Failed to write canvas_state.json: %s", exc)
+
+        def _on_navigate(self):
+            url = self._url_input.text().strip()
+            if url and not url.startswith(("http://", "https://", "file://")):
+                url = "https://" + url
+            if url:
+                self._view.load(QUrl(url))
+
+        def _on_url_changed(self, qurl: QUrl):
+            self._url_input.setText(qurl.toString())
+
+        # Pass-through move/resize events so state file is always current
+        def moveEvent(self, event):
+            super().moveEvent(event)
+            self._write_state()
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self._write_state()
+
+        def showEvent(self, event):
+            super().showEvent(event)
+            self._write_state()
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    if not _PYQT6_AVAILABLE:
+        logger.error("PyQt6 is not installed — cannot launch the canvas window.")
+        sys.exit(1)
+
+    url = sys.argv[1] if len(sys.argv) > 1 else None
+    if not url:
+        home = ensure_default_desktop()
+        url = f"file:///{home.replace(os.sep, '/')}"
+
+    app = QApplication(sys.argv)
+    app.setApplicationName("AI Desktop Canvas")
+
+    # High-DPI awareness (Qt 6 handles this automatically, but be explicit)
+    app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
+
+    logger.info("Launching AI Desktop Canvas → %s", url)
+    window = AIDesktopCanvas(initial_url=url)
     window.show()
 
     sys.exit(app.exec())
 
 
 if __name__ == "__main__":
-    url = sys.argv[1] if len(sys.argv) > 1 else "https://chatgpt.com"
-    run_canvas_app(initial_url=url)
+    main()

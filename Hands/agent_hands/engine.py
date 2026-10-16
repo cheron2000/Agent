@@ -8,7 +8,7 @@ import pyautogui
 from .config import PROFILES, TypingProfile
 from .keyboard import press_single_key
 from .typos import get_adjacent_typo
-from .windows import focus_window
+from .windows import ensure_interactive_desktop, focus_window
 
 
 class TypingEngine:
@@ -59,6 +59,7 @@ class TypingEngine:
         Returns:
             Dictionary with typing statistics (chars_typed, typos_corrected, elapsed_seconds, actual_wpm).
         """
+        ensure_interactive_desktop()
         if not text:
             return {"chars_typed": 0, "typos_corrected": 0, "elapsed_seconds": 0.0, "actual_wpm": 0.0}
 

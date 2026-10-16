@@ -1,0 +1,25 @@
+{
+  "project_type": "Windows desktop AI agent — FastAPI/Playwright primary server + PyQt6 native canvas + Eyes vision subsystem + AgentHands keyboard/mouse subsystem",
+  "language": "Python 3.10+",
+  "build_system": "No build step; pure Python. venv at f:\\Shreyash DOC\\shreyash\\Agent\\venv. Install: venv\\Scripts\\pip install -r requirements.txt",
+  "test_framework": "pytest (not yet installed in venv; must be installed first via requirements.txt update). Existing tests live in Hands\\tests\\ and use unittest.mock. New tests go in tests\\ at project root.",
+  "build_command": "venv\\Scripts\\python.exe -c \"import parallel_desktop_server\" (import-only smoke check)",
+  "test_command": "venv\\Scripts\\python.exe -m pytest tests\\ -v",
+  "verification_instructions": "1. Run: venv\\Scripts\\pip install -r requirements.txt --dry-run to confirm no conflicts. 2. Run: venv\\Scripts\\python.exe -m pytest tests\\ -v — all smoke tests must pass. 3. Run: venv\\Scripts\\python.exe -m pytest Hands\\tests\\ -v — existing tests must still pass.",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "Windows only (win32 platform checks in source). venv\\Scripts\\python.exe is the interpreter — never use bare 'python'. All file paths use f:\\Shreyash DOC\\shreyash\\Agent\\ as root. Never restart any running server. fastapi, uvicorn, httpx, playwright, pydantic are already installed in the venv — pytest and pytest-asyncio are NOT yet installed.",
+  "contribution_requirements": "No CONTRIBUTING.md found. Follow conventions in existing code: snake_case, type hints, docstrings on public methods, no bare except clauses.",
+  "key_patterns": "Pydantic v2 BaseModel for request models (from pydantic import BaseModel, field_validator). FastAPI HTTPException for error responses. AsyncMock/MagicMock in tests. httpx AsyncClient with ASGITransport(app=app) for endpoint tests (not TestClient, because endpoints are async). eyes._ACTIVE_TASK_SESSION is module-level global. TaskSession in Eyes/eyes.py has task_name, screenshots, is_active — no started_at yet. CURSOR_INJECTION_JS is defined in parallel_canvas.py and imported by parallel_desktop_server.py.",
+  "relevant_files": [
+    "requirements.txt",
+    "parallel_desktop_server.py",
+    "parallel_canvas.py",
+    "canvas_desktop.py",
+    "ai_controller.py",
+    "Eyes/eyes.py",
+    "tools.json",
+    "Hands/tests/test_engine.py",
+    "Hands/pyproject.toml"
+  ],
+  "directory_structure": "Root: parallel_desktop_server.py (primary FastAPI server, port 8765), parallel_canvas.py (legacy sync canvas), canvas_desktop.py (PyQt6 native canvas), ai_controller.py (native canvas controller), tools.json (script registry), requirements.txt, ARCHITECTURE.md. Eyes/: eyes.py (vision engine), eyes_server.py, eyes_mcp.py, screenshots/. Hands/: agent_hands package, tests/, pyproject.toml. .agents/tasks/: plan files and FEAT artifacts (NOT inside the worktree for git). venv/: Python virtual environment."
+}

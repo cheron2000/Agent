@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-004",
+  "type": "test",
+  "description": "Create smoke test suite tests/test_server_smoke.py covering all 5 required test cases. Depends on FEAT-001 (pytest installed), FEAT-002 (validators + task_id + URL check in place). Must be authored last.",
+  "status": "pending",
+  "steps": [
+    "Create f:\\Shreyash DOC\\shreyash\\Agent\\tests\\__init__.py as an empty file so pytest can discover the package.",
+
+    "Create f:\\Shreyash DOC\\shreyash\\Agent\\tests\\test_server_smoke.py with the following complete content:\n\n```python\n\"\"\"Smoke tests for parallel_desktop_server FastAPI app.\"\"\"\nimport sys\nimport os\nimport pytest\nfrom httpx import AsyncClient, ASGITransport\nfrom unittest.mock import AsyncMock, MagicMock, patch\n\n# Ensure project root is on path\nsys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))\n\nfrom parallel_desktop_server import app\n\n\ndef _make_mock_canvas():\n    \"\"\"Return a MagicMock that simulates a live AsyncParallelDesktop.\"\"\"\n    mock = MagicMock()\n    mock.page = MagicMock()\n    mock.page.url = \"http://example.com\"\n    mock.set_status = AsyncMock()\n    mock.navigate = AsyncMock()\n    mock.capture = AsyncMock(return_value={\n        \"success\": True, \"path\": \"/tmp/x.png\",\n        \"width\": 1240, \"height\": 800, \"error\": None\n    })\n    mock.transcribe = AsyncMock(return_value={\n        \"success\": True, \"text\": \"\", \"elements\": []\n    })\n    mock.width = 1240\n    mock.height = 800\n    mock.cursor_pos = (0, 0)\n    return mock\n\n\n@pytest.fixture\nasync def async_client():\n    mock_canvas = _make_mock_canvas()\n    mock_session = MagicMock()\n    mock_session.task_name = \"smoke\"\n    mock_session.started_at = 0.0\n\n    with patch(\"parallel_desktop_server.canvas\", mock_canvas), \\\n         patch(\"parallel_desktop_server.eyes.start_task\", return_value=mock_session), \\\n         patch(\"parallel_desktop_server.eyes.end_task\", return_value=0), \\\n         patch(\"parallel_desktop_server.eyes._ACTIVE_TASK_SESSION\", None):\n        async with AsyncClient(\n            transport=ASGITransport(app=app), base_url=\"http://test\"\n        ) as client:\n            yield client\n\n\n@pytest.mark.asyncio\nasync def test_health_returns_200(async_client):\n    resp = await async_client.get(\"/health\")\n    assert resp.status_code == 200\n    assert resp.json()[\"status\"] == \"ok\"\n\n\n@pytest.mark.asyncio\nasync def test_navigate_rejects_non_http(async_client):\n    resp = await async_client.post(\"/navigate\", json={\"url\": \"ftp://bad.example.com\"})\n    assert resp.status_code == 400\n\n\n@pytest.mark.asyncio\nasync def test_click_out_of_bounds(async_client):\n    resp = await async_client.post(\"/click\", json={\"x\": 9999, \"y\": 9999})\n    assert resp.status_code == 422\n\n\n@pytest.mark.asyncio\nasync def test_task_start_has_task_id(async_client):\n    resp = await async_client.post(\"/task/start\", json={\"task_name\": \"smoke\"})\n    assert resp.status_code == 200\n    body = resp.json()\n    assert \"task_id\" in body\n\n\n@pytest.mark.asyncio\nasync def test_task_end_returns_deleted_count(async_client):\n    resp = await async_client.post(\"/task/end\")\n    assert resp.status_code == 200\n    body = resp.json()\n    assert \"deleted_screenshots\" in body\n```",
+
+    "Create (or append to) f:\\Shreyash DOC\\shreyash\\Agent\\pytest.ini with content:\n```\n[pytest]\nasyncio_mode = auto\n```\nThis enables automatic async test detection without needing @pytest.mark.asyncio on every test. If a pyproject.toml exists at root, add the section there instead.",
+
+    "Run the smoke tests to confirm all 5 pass: `f:\\Shreyash DOC\\shreyash\\Agent\\venv\\Scripts\\python.exe -m pytest tests\\test_server_smoke.py -v`. Fix any import or mock errors before marking this FEAT complete.",
+
+    "Run the Hands tests to confirm no regressions: `f:\\Shreyash DOC\\shreyash\\Agent\\venv\\Scripts\\python.exe -m pytest Hands\\tests\\ -v`.",
+
+    "Record pass/fail counts in findings field of this FEAT file."
+  ],
+  "acceptance_criteria": [
+    "tests/test_server_smoke.py exists and contains 5 test functions.",
+    "All 5 smoke tests pass: test_health_returns_200, test_navigate_rejects_non_http, test_click_out_of_bounds, test_task_start_has_task_id, test_task_end_returns_deleted_count.",
+    "Hands/tests/ tests still pass (no regressions).",
+    "pytest.ini (or equivalent) sets asyncio_mode = auto."
+  ],
+  "verification": [
+    "venv\\Scripts\\python.exe -m pytest tests\\test_server_smoke.py -v",
+    "venv\\Scripts\\python.exe -m pytest Hands\\tests\\ -v"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

@@ -465,6 +465,12 @@ def screen_map(
                 "column": col + 1,
                 "box": {"left": left, "top": top, "width": right - left, "height": bottom - top},
                 "center": {"x": (left + right) // 2, "y": (top + bottom) // 2},
+                "corners": {
+                    "top_left": {"x": left, "y": top},
+                    "top_right": {"x": right, "y": top},
+                    "bottom_left": {"x": left, "y": bottom},
+                    "bottom_right": {"x": right, "y": bottom},
+                },
                 "elements": [],
             })
 
@@ -483,6 +489,12 @@ def screen_map(
         mapped = dict(element)
         mapped["id"] = f"e{index}"
         mapped["cell"] = cell_name
+        mapped["corners"] = {
+            "top_left": {"x": box["x"], "y": box["y"]},
+            "top_right": {"x": box["x"] + box["width"], "y": box["y"]},
+            "bottom_left": {"x": box["x"], "y": box["y"] + box["height"]},
+            "bottom_right": {"x": box["x"] + box["width"], "y": box["y"] + box["height"]},
+        }
         mapped_elements.append(mapped)
         cells[row * columns + col]["elements"].append(mapped["id"])
 
@@ -492,7 +504,10 @@ def screen_map(
         if cell["elements"]:
             entries = [by_id[item] for item in cell["elements"]]
             text = " ".join(item["text"] for item in entries)
-            transcription.append(f"[{cell['cell']}] {text}")
+            c = cell["corners"]
+            transcription.append(
+                f"[{cell['cell']} ({c['top_left']['x']},{c['top_left']['y']} -> {c['bottom_right']['x']},{c['bottom_right']['y']})] {text}"
+            )
 
     return {
         "success": True,

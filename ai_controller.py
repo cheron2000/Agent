@@ -1,88 +1,86 @@
-"""ai_controller.py - AI Controller for Desktop Canvas, Strict Bounding & Ephemeral Storage.
+"""Direct controller for an agent operating the real Windows desktop.
 
-Binds Eyes and Hands exclusively to the AI Desktop Canvas viewport:
-- Automatic coordinate synchronization with canvas_desktop.py.
-- Strict spatial clamping: All screenshots, OCR transcriptions, clicks, and scrolls happen ONLY inside the canvas.
-- Ephemeral lifecycle: All screenshots captured during a task are tracked in memory and automatically purged from disk upon task completion.
+This module deliberately has no virtual canvas or browser sandbox.  It uses
+Eyes for desktop perception and AgentHands for mouse/keyboard actions on the
+currently visible Windows desktop.
 """
 
-import json
+import logging
 import os
 import sys
-import time
 from contextlib import contextmanager
 from typing import Any, Dict, Optional, Tuple
 
-# Ensure Eyes and Hands are importable
-sys.path.extend([
-    os.path.join(os.path.dirname(__file__), "Eyes"),
-    os.path.join(os.path.dirname(__file__), "Hands"),
-])
+ROOT = os.path.dirname(__file__)
+sys.path.extend([os.path.join(ROOT, "Eyes"), os.path.join(ROOT, "Hands")])
+
+# ---------------------------------------------------------------------------
+# Module-level logger
+# ---------------------------------------------------------------------------
+
+_log_formatter = logging.Formatter("%(asctime)s %(levelname)s [ai_controller] %(message)s")
+
+_file_handler = logging.FileHandler(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "err.log"),
+    encoding="utf-8",
+)
+_file_handler.setFormatter(_log_formatter)
+
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_log_formatter)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.addHandler(_file_handler)
+logger.addHandler(_console_handler)
 
 import eyes
 from agent_hands.engine import TypingEngine
 from agent_hands.keyboard import fast_paste, press_single_key
-import agent_hands.mouse as hands_mouse
-from agent_hands.windows import focus_window
-
-from canvas_desktop import CANVAS_STATE_FILE, get_canvas_bounds
+from agent_hands.mouse import click, move_to, scroll
+from agent_hands.windows import focus_window, get_active_window_title, list_windows
 
 
-class CanvasAIController:
-    """Central AI Controller orchestrating Eyes & Hands strictly within the AI Desktop Canvas."""
-
-    def __init__(self):
-        self.active_task: Optional[str] = None
-        self.session: Optional[eyes.TaskSession] = None
-        self.bounds: Optional[Tuple[int, int, int, int]] = None
-        self.sync_canvas_bounds()
-
-    def sync_canvas_bounds(self) -> Optional[Tuple[int, int, int, int]]:
-        """Read latest viewport boundaries from canvas_desktop and bind Eyes and Hands."""
-        bounds = get_canvas_bounds()
-        if bounds:
-            self.bounds = bounds
-            eyes.set_canvas_region(bounds)
-            hands_mouse.set_canvas_bounds(bounds)
-        return bounds
+class DesktopAgentController:
+    """Perceive and operate the user's actual desktop through Eyes and AgentHands."""
 
     @contextmanager
-    def task(self, task_name: str = "ai_task"):
-        """Context manager guaranteeing all task screenshots are strictly ephemeral and auto-deleted."""
-        self.sync_canvas_bounds()
-        self.active_task = task_name
-        self.session = eyes.start_task(task_name)
-        print(f"\n[AI Controller] [TASK START] Started Task: '{task_name}' (Ephemeral Storage Active)")
+    def task(self, task_name: str = "desktop_task"):
+        """Track screenshots generated during a task and clean them on exit."""
+        session = eyes.start_task(task_name)
         try:
             yield self
         finally:
-            deleted = eyes.end_task()
-            print(f"[AI Controller] [CLEANUP] Task '{task_name}' Completed. Purged {deleted} ephemeral screenshot(s) from disk.\n")
-            self.active_task = None
-            self.session = None
+            eyes.end_task()
 
-    # ── EYES (Perception bounded strictly to canvas) ─────────────────────────
+    # Perception
+    def screen_info(self) -> Dict[str, Any]:
+        return eyes.get_screen_info()
 
     def capture(self, save: bool = True) -> Dict[str, Any]:
-        """Capture screenshot ONLY within the canvas viewport."""
-        self.sync_canvas_bounds()
-        return eyes.capture(region=self.bounds, save=save)
+        return eyes.capture(save=save)
 
     def transcribe(self, detailed: bool = False) -> Dict[str, Any]:
-        """OCR extract text ONLY within the canvas viewport."""
-        self.sync_canvas_bounds()
-        return eyes.read_text(region=self.bounds, detailed=detailed)
+        return eyes.read_text(detailed=detailed)
 
-    def find_on_canvas(self, target: str) -> Dict[str, Any]:
-        """Locate element/text specifically inside the canvas viewport."""
-        self.sync_canvas_bounds()
-        return eyes.find_on_screen(target)
+    def find(self, target: str, min_confidence: int = 30) -> Dict[str, Any]:
+        return eyes.find_on_screen(target, min_confidence=min_confidence)
 
-    # ── HANDS (Actions clamped strictly to canvas) ───────────────────────────
+    def describe(self, prompt: Optional[str] = None) -> Dict[str, Any]:
+        return eyes.describe(prompt=prompt)
 
-    def focus(self) -> bool:
-        """Bring the AI Canvas window to the foreground."""
-        return focus_window("AI Desktop Workspace")
+    def windows(self) -> Dict[str, Any]:
+        return {
+            "active_window": get_active_window_title(),
+            "windows": list_windows(),
+        }
+
+    # Real desktop input
+    def focus(self, window_title: str) -> bool:
+        return focus_window(window_title)
+
+    def move(self, x: int, y: int, duration: float = 0.2) -> Dict[str, Any]:
+        return move_to(x=x, y=y, duration=duration)
 
     def click(
         self,
@@ -91,74 +89,135 @@ class CanvasAIController:
         button: str = "left",
         clicks: int = 1,
     ) -> Dict[str, Any]:
-        """Click strictly within the canvas viewport."""
-        self.sync_canvas_bounds()
-        return hands_mouse.click(x=x, y=y, button=button, clicks=clicks)
+        return click(x=x, y=y, button=button, clicks=clicks)
 
-    def double_click(self, x: Optional[int] = None, y: Optional[int] = None) -> Dict[str, Any]:
-        """Double click within the canvas viewport."""
-        return self.click(x=x, y=y, button="left", clicks=2)
-
-    def scroll(self, amount: int, x: Optional[int] = None, y: Optional[int] = None, smooth: bool = True) -> Dict[str, Any]:
-        """Scroll mouse wheel strictly within the canvas viewport."""
-        self.sync_canvas_bounds()
-        return hands_mouse.scroll(clicks=amount, x=x, y=y, smooth=smooth)
+    def scroll(self, clicks: int, x: Optional[int] = None, y: Optional[int] = None) -> Dict[str, Any]:
+        return scroll(clicks=clicks, x=x, y=y, smooth=True)
 
     def type_text(self, text: str, profile: str = "natural", typos: bool = False) -> Dict[str, Any]:
-        """Type text into the canvas using natural human cadence."""
-        engine = TypingEngine(profile=profile)
-        return engine.type_text(text=text, introduce_typos=typos)
+        """Send simulated keyboard input to the active Windows application."""
+        return TypingEngine(profile=profile).type_text(text=text, introduce_typos=typos)
 
     def paste_text(self, text: str) -> None:
-        """Fast paste large text block into active canvas input."""
         fast_paste(text)
 
     def press_key(self, key: str) -> None:
-        """Press a keyboard key."""
         press_single_key(key)
 
 
-class ParallelDesktopController:
-    """High-level controller for the parallel isolated desktop canvas (Desktop 2).
-    
-    Operates strictly within the isolated canvas window without touching
-    the host operating system cursor or interfering with user multitasking.
+class CanvasAIController:
+    """Orchestration bridge for the PyQt6 native canvas.
+
+    Reads canvas_state.json via get_canvas_bounds(), pushes those bounds into
+    both eyes.set_canvas_region() and hands_mouse.set_canvas_bounds(), and
+    exposes a context-manager (task(name)) that wraps a TaskSession.  On exit
+    the session auto-deletes every screenshot taken during that task.
     """
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8765"):
-        from canvas_client import CanvasClient
-        self.client = CanvasClient(base_url=base_url)
+    def __init__(self):
+        # Import here so that the module is importable even without canvas running
+        from canvas_desktop import get_canvas_bounds as _gcb
+        self._get_canvas_bounds = _gcb
 
-    def is_running(self) -> bool:
-        return self.client.is_alive()
+        import eyes as _eyes_module
+        self._eyes = _eyes_module
 
-    def status(self) -> Dict[str, Any]:
-        return self.client.status()
+        from agent_hands import mouse as _hands_mouse
+        self._hands_mouse = _hands_mouse
 
-    def navigate(self, url: str) -> Dict[str, Any]:
-        return self.client.navigate(url)
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
-    def move(self, x: int, y: int, duration: float = 0.3) -> Dict[str, Any]:
-        return self.client.move(x, y, duration=duration)
+    def sync_canvas_bounds(self) -> Optional[Tuple]:
+        """Read canvas_state.json and push bounds into Eyes and AgentHands.
 
-    def click(self, x: int, y: int, button: str = "left") -> Dict[str, Any]:
-        return self.client.click(x, y, button=button)
+        Returns the bounds tuple on success, None if the canvas is unavailable.
+        """
+        try:
+            bounds = self._get_canvas_bounds()
+        except RuntimeError as e:
+            logger.error("Canvas bounds unavailable: %s", e)
+            return None
 
-    def type_text(self, text: str, delay: float = 0.04) -> Dict[str, Any]:
-        return self.client.type_text(text, delay=delay)
+        if bounds:
+            x, y, w, h = bounds
+            self._eyes.set_canvas_region(x, y, w, h)
+            self._hands_mouse.set_canvas_bounds(x, y, w, h)
+        return bounds
 
-    def press(self, key: str) -> Dict[str, Any]:
-        return self.client.press(key)
+    # ------------------------------------------------------------------
+    # Task lifecycle
+    # ------------------------------------------------------------------
 
-    def scroll(self, delta_y: int) -> Dict[str, Any]:
-        return self.client.scroll(delta_y)
+    @contextmanager
+    def task(self, task_name: str = "canvas_task"):
+        """Track screenshots generated during a task and clean them on exit."""
+        self.sync_canvas_bounds()
+        session = self._eyes.start_task(task_name)
+        logger.info("[TASK START] Started Task: %s (Ephemeral Storage Active)", task_name)
+        try:
+            yield self
+        finally:
+            deleted = self._eyes.end_task()
+            logger.info(
+                "[CLEANUP] Task %s completed. Purged %d ephemeral screenshot(s).",
+                task_name,
+                deleted,
+            )
 
-    def capture(self) -> Dict[str, Any]:
-        return self.client.capture()
+    # ------------------------------------------------------------------
+    # Perception
+    # ------------------------------------------------------------------
+
+    def capture(self, save: bool = True) -> Dict[str, Any]:
+        return self._eyes.capture(save=save)
 
     def transcribe(self, detailed: bool = False) -> Dict[str, Any]:
-        return self.client.ocr(detailed=detailed)
+        return self._eyes.read_text(detailed=detailed)
 
-    def order_chocolate(self, item: str = "KitKat") -> Dict[str, Any]:
-        return self.client.order_chocolate(item=item)
+    def find_on_canvas(self, target: str, min_confidence: int = 30) -> Dict[str, Any]:
+        return self._eyes.find_on_screen(target, min_confidence=min_confidence)
 
+    def describe(self, prompt: Optional[str] = None) -> Dict[str, Any]:
+        return self._eyes.describe(prompt=prompt)
+
+    # ------------------------------------------------------------------
+    # Input
+    # ------------------------------------------------------------------
+
+    def focus(self, window_title: str) -> bool:
+        return focus_window(window_title)
+
+    def move(self, x: int, y: int, duration: float = 0.2) -> Dict[str, Any]:
+        return move_to(x=x, y=y, duration=duration)
+
+    def click(
+        self,
+        x: Optional[int] = None,
+        y: Optional[int] = None,
+        button: str = "left",
+        clicks: int = 1,
+    ) -> Dict[str, Any]:
+        return click(x=x, y=y, button=button, clicks=clicks)
+
+    def double_click(self, x: Optional[int] = None, y: Optional[int] = None) -> Dict[str, Any]:
+        return click(x=x, y=y, button="left", clicks=2)
+
+    def scroll(self, clicks: int, x: Optional[int] = None, y: Optional[int] = None) -> Dict[str, Any]:
+        return scroll(clicks=clicks, x=x, y=y, smooth=True)
+
+    def type_text(self, text: str, profile: str = "natural", typos: bool = False) -> Dict[str, Any]:
+        """Send simulated keyboard input to the active application."""
+        return TypingEngine(profile=profile).type_text(text=text, introduce_typos=typos)
+
+    def paste_text(self, text: str) -> None:
+        fast_paste(text)
+
+    def press_key(self, key: str) -> None:
+        press_single_key(key)
+
+
+if __name__ == "__main__":
+    controller = DesktopAgentController()
+    logger.info("%s", controller.screen_info())
