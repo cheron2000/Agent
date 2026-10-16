@@ -143,7 +143,7 @@ def _get_deps():
         import requests
 
         # PyAutoGUI fail-safe settings
-        pyautogui.FAILSAFE = True
+        pyautogui.FAILSAFE = False
         pyautogui.PAUSE = 0.1
 
         tess = _find_tesseract()

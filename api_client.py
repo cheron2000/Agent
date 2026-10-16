@@ -248,6 +248,17 @@ def main():
     type_p.add_argument("--wpm", type=float, default=None)
     key_p = hands_sub.add_parser("key", help="Press key")
     key_p.add_argument("name", type=str)
+    hotkey_p = hands_sub.add_parser("hotkey", help="Trigger hotkey combination (e.g. 'win+r')")
+    hotkey_p.add_argument("keys", type=str)
+    paste_p = hands_sub.add_parser("paste", help="Paste text via clipboard")
+    paste_p.add_argument("text", type=str)
+    move_p = hands_sub.add_parser("move", help="Move cursor to (x, y)")
+    move_p.add_argument("x", type=int)
+    move_p.add_argument("y", type=int)
+    scroll_p = hands_sub.add_parser("scroll", help="Scroll wheel")
+    scroll_p.add_argument("clicks", type=int)
+    focus_p = hands_sub.add_parser("focus", help="Focus window")
+    focus_p.add_argument("title", type=str)
     hands_sub.add_parser("windows", help="List open windows")
     hands_sub.add_parser("status", help="Get Hands status")
 
@@ -306,6 +317,16 @@ def main():
             print(json.dumps(client.hands.type_text(args.text, wpm=args.wpm), indent=2))
         elif args.action == "key":
             print(json.dumps(client.hands.key(args.name), indent=2))
+        elif args.action == "hotkey":
+            print(json.dumps(client.hands.hotkey(args.keys), indent=2))
+        elif args.action == "paste":
+            print(json.dumps(client.hands.paste(args.text), indent=2))
+        elif args.action == "move":
+            print(json.dumps(client.hands.move(args.x, args.y), indent=2))
+        elif args.action == "scroll":
+            print(json.dumps(client.hands.scroll(args.clicks), indent=2))
+        elif args.action == "focus":
+            print(json.dumps(client.hands.focus(args.title), indent=2))
         elif args.action == "windows":
             print(json.dumps(client.hands.windows(), indent=2))
         elif args.action == "status":

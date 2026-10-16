@@ -5,8 +5,8 @@ from typing import List, Optional, Union
 import pyautogui
 import pyperclip
 
-# Enable PyAutoGUI fail-safe: Moving mouse to any corner of screen aborts execution
-pyautogui.FAILSAFE = True
+# Keyboard operations should not trigger mouse-corner fail-safe
+pyautogui.FAILSAFE = False
 
 # Common key alias normalizer
 KEY_ALIASES = {
