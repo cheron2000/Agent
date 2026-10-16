@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-001",
+  "type": "chore",
+  "description": "Housekeeping: fix dependency drift, create scripts/ stub, and annotate legacy canvas class. Independent of FEAT-002/003/004 — no shared file edits except requirements.txt, scripts/README.md, and parallel_canvas.py.",
+  "status": "completed",
+  "steps": [
+    "Edit f:\\Shreyash DOC\\shreyash\\Agent\\requirements.txt: keep existing entries (flask, flask-cors, requests, psutil, pyautogui, pillow, pycaw, comtypes, screen-brightness-control, pyperclip, pywin32, PyQt6>=6.11.0, PyQt6-WebEngine>=6.11.0). Add four comment-delimited groups below them: '# core server' with fastapi==0.115.5, uvicorn[standard]==0.32.1, playwright==1.49.1, pydantic==2.10.3, httpx==0.28.1; '# OCR' with pytesseract==0.3.13, mcp==2.0.0; '# native canvas (optional)' comment only (PyQt6 entries already above); '# dev tools' with pytest==8.3.4, pytest-asyncio==0.24.0.",
+    "Create f:\\Shreyash DOC\\shreyash\\Agent\\scripts\\README.md with content: '# scripts/ — Not Yet Implemented\\n\\nThe scripts referenced in tools.json (OPEN_VSCODE.ps1, MUTE_VOLUME.py, OPEN_BROWSER.py, SCREENSHOT.py, LIST_FILES.py, OPEN_NOTEPAD.ps1, SYSTEM_INFO.py, CLOSE_APP.py, SHUTDOWN.py, CANCEL_SHUTDOWN.py, GET_TIME.py, TYPE_TEXT.py, SEARCH_GOOGLE.py, SET_BRIGHTNESS.py, EMPTY_RECYCLE_BIN.py, CREATE_FOLDER.py, DELETE_FILE.py, PLAY_PAUSE_MEDIA.py, LOCK_SCREEN.py, OPEN_APP.py, CLIPBOARD_COPY.py, START_OLLLAMA_SERVER.py, DESCRIBE_SCREEN.py, READ_SCREEN.py, FIND_ON_SCREEN.py, CLICK_ELEMENT.py) are **not yet implemented**.\\n\\n`tools.json` is a declarative registry used by the AI agent to discover available OS-level tools. The actual script files listed above must be created before these tools can be executed. Do NOT delete tools.json.'",
+    "Install dev dependencies from requirements.txt into the venv: run `f:\\Shreyash DOC\\shreyash\\Agent\\venv\\Scripts\\pip install pytest==8.3.4 pytest-asyncio==0.24.0` so later FEATs can run tests.",
+    "Edit f:\\Shreyash DOC\\shreyash\\Agent\\parallel_canvas.py: in the ParallelCanvasDesktop class body, insert the following as the first line of the class docstring (replacing the existing docstring): 'LEGACY: This class is the synchronous Playwright implementation and is NOT used by the primary server (parallel_desktop_server.py uses AsyncParallelDesktop directly). Retained for reference only. Do not instantiate from server code.\\n\\nParallel AI Desktop Canvas running in an isolated Chromium process.' Do NOT change any method signatures or logic."
+  ],
+  "acceptance_criteria": [
+    "requirements.txt contains pytest==8.3.4 and pytest-asyncio==0.24.0 under a '# dev tools' comment.",
+    "requirements.txt contains fastapi==0.115.5 under a '# core server' comment.",
+    "scripts/README.md exists and mentions tools.json.",
+    "Running `venv\\Scripts\\python.exe -m pytest --version` prints a version string (pytest is now installed).",
+    "ParallelCanvasDesktop.__doc__ starts with 'LEGACY:'.",
+    "`venv\\Scripts\\python.exe -c \"from parallel_canvas import ParallelCanvasDesktop\"` exits without error."
+  ],
+  "verification": [
+    "venv\\Scripts\\python.exe -m pytest --version",
+    "venv\\Scripts\\python.exe -c \"from parallel_canvas import ParallelCanvasDesktop; assert 'LEGACY' in ParallelCanvasDesktop.__doc__; print('OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": "playwright==1.49.1 cannot be installed on Python 3.14 (greenlet==3.1.1 requires C compiler, no pre-built wheel for cp314). Installed playwright==1.64.0 instead (greenlet>=3.1.1 satisfied by 3.5.6). requirements.txt retains playwright==1.49.1 as the pinned target version per spec; later FEATs should update it to 1.64.0 if they depend on playwright. The venv now has: pytest==8.3.4, pytest-asyncio==0.24.0, playwright==1.64.0, greenlet==3.5.6. Both verification commands pass."
+}
