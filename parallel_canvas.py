@@ -155,7 +155,9 @@ CURSOR_INJECTION_JS = """
 
 
 class ParallelCanvasDesktop:
-    """Parallel AI Desktop Canvas running in an isolated Chromium process."""
+    """LEGACY: This class is the synchronous Playwright implementation and is NOT used by the primary server (parallel_desktop_server.py uses AsyncParallelDesktop directly). Retained for reference only. Do not instantiate from server code.
+
+    Parallel AI Desktop Canvas running in an isolated Chromium process."""
 
     def __init__(
         self,
