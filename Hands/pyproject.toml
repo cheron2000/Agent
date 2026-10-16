@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-hands"
+version = "0.1.0"
+description = "Universal Keyboard Hands for Any AI Agent with Human-Like Typing Simulation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    {name = "AgentHands Team"}
+]
+keywords = ["ai", "agent", "keyboard", "human-like-typing", "mcp", "automation"]
+dependencies = [
+    "pyautogui>=0.9.54",
+    "pywin32>=306; platform_system=='Windows'",
+    "pyperclip>=1.8.2",
+    "mcp>=2.0.0",
+]
+
+[project.scripts]
+agent-hands = "agent_hands.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["agent_hands*"]

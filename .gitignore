@@ -1,0 +1,31 @@
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Browser profiles and user state
+ai_chrome_profile/
+canvas_user_dir/
+canvas_state.json
+
+# Temporary / Ephemeral Screenshots
+Eyes/screenshots/*
+!Eyes/screenshots/.gitkeep
+
+# IDE & OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/

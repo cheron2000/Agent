@@ -1,0 +1,237 @@
+{
+  "openai_tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "screen_capture",
+        "description": "Capture the current desktop screen or a region. Returns the image file path, resolution dimensions, and optional base64 thumbnail.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "save": { "type": "boolean", "description": "Save image to screenshots folder", "default": true },
+            "include_base64": { "type": "boolean", "description": "Include base64 JPEG data for immediate vision analysis", "default": false },
+            "region": { "type": "array", "items": { "type": "integer" }, "description": "[x, y, width, height] bounding box or null for full screen" }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "screen_ocr",
+        "description": "Extract all visible text from the screen using OCR. Useful for finding text labels, reading error messages, and verifying UI state.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "detailed": { "type": "boolean", "description": "If true, returns word-level bounding boxes and confidence scores", "default": false }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "screen_find",
+        "description": "Locate text or a UI element label on the screen. Returns center (x, y) coordinates and bounding box.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target": { "type": "string", "description": "Text or label to search for on screen" },
+            "min_confidence": { "type": "integer", "description": "Minimum OCR confidence threshold (0-100)", "default": 30 }
+          },
+          "required": ["target"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "screen_describe",
+        "description": "Get a semantic visual description of the screen or region using a vision model (Ollama LLaVA, GPT-4o, or Claude).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "prompt": { "type": "string", "description": "Specific question or guidance about what to inspect on screen" }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "screen_click",
+        "description": "Click at specific (x, y) pixel coordinates or find and click a text label on screen.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "x": { "type": "integer", "description": "X pixel coordinate" },
+            "y": { "type": "integer", "description": "Y pixel coordinate" },
+            "target": { "type": "string", "description": "Text label to find and click if (x, y) not provided" },
+            "click_type": { "type": "string", "enum": ["left", "right", "double"], "default": "left" }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "screen_type",
+        "description": "Type text into the currently active / focused window.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string", "description": "Text string to type" },
+            "press_enter": { "type": "boolean", "description": "Press enter immediately after typing", "default": false }
+          },
+          "required": ["text"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "screen_press_key",
+        "description": "Press a key or keyboard shortcut (e.g. 'enter', 'tab', 'ctrl+c', 'alt+tab').",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "key": { "type": "string", "description": "Key name or hotkey combination" }
+          },
+          "required": ["key"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "screen_scroll",
+        "description": "Scroll the mouse wheel. Negative values scroll down, positive values scroll up.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "clicks": { "type": "integer", "description": "Number of scroll clicks", "default": -3 }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "enhance_vision_prompt",
+        "description": "Enhance any user prompt into a structured, vision-grounded prompt with explicit observation, grounding, and verification steps.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "task": { "type": "string", "description": "Raw task description" },
+            "target_application": { "type": "string", "description": "Target application name" }
+          },
+          "required": ["task"]
+        }
+      }
+    }
+  ],
+  "anthropic_tools": [
+    {
+      "name": "screen_capture",
+      "description": "Capture the current desktop screen or a region. Returns the image file path, resolution dimensions, and optional base64 thumbnail.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "save": { "type": "boolean", "default": true },
+          "include_base64": { "type": "boolean", "default": false },
+          "region": { "type": "array", "items": { "type": "integer" } }
+        }
+      }
+    },
+    {
+      "name": "screen_ocr",
+      "description": "Extract all visible text from the screen using OCR. Useful for finding text labels, reading error messages, and verifying UI state.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "detailed": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    {
+      "name": "screen_find",
+      "description": "Locate text or a UI element label on the screen. Returns center (x, y) coordinates and bounding box.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": { "type": "string", "description": "Text or label to search for" },
+          "min_confidence": { "type": "integer", "default": 30 }
+        },
+        "required": ["target"]
+      }
+    },
+    {
+      "name": "screen_describe",
+      "description": "Get a semantic visual description of the screen or region using a vision model.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "prompt": { "type": "string", "description": "Specific question or guidance" }
+        }
+      }
+    },
+    {
+      "name": "screen_click",
+      "description": "Click at specific (x, y) pixel coordinates or find and click a text label on screen.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "x": { "type": "integer" },
+          "y": { "type": "integer" },
+          "target": { "type": "string" },
+          "click_type": { "type": "string", "enum": ["left", "right", "double"], "default": "left" }
+        }
+      }
+    },
+    {
+      "name": "screen_type",
+      "description": "Type text into the currently active / focused window.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" },
+          "press_enter": { "type": "boolean", "default": false }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "screen_press_key",
+      "description": "Press a key or keyboard shortcut (e.g. 'enter', 'tab', 'ctrl+c', 'alt+tab').",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "key": { "type": "string" }
+        },
+        "required": ["key"]
+      }
+    },
+    {
+      "name": "screen_scroll",
+      "description": "Scroll the mouse wheel. Negative values scroll down, positive values scroll up.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "clicks": { "type": "integer", "default": -3 }
+        }
+      }
+    },
+    {
+      "name": "enhance_vision_prompt",
+      "description": "Enhance any user prompt into a structured, vision-grounded prompt.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "task": { "type": "string" },
+          "target_application": { "type": "string" }
+        },
+        "required": ["task"]
+      }
+    }
+  ]
+}

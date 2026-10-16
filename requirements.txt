@@ -1,0 +1,13 @@
+flask==3.0.3
+flask-cors==4.0.1
+requests==2.32.3
+psutil==6.0.0
+pyautogui==0.9.54
+pillow==12.3.0
+pycaw==20240210
+comtypes==1.4.4
+screen-brightness-control==0.22.1
+pyperclip==1.9.0
+pywin32==312
+PyQt6>=6.11.0
+PyQt6-WebEngine>=6.11.0

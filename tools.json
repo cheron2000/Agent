@@ -1,0 +1,189 @@
+{
+  "OPEN_VSCODE": {
+    "description": "Opens Visual Studio Code editor",
+    "script": "scripts/OPEN_VSCODE.ps1",
+    "type": "powershell",
+    "args": []
+  },
+  "MUTE_VOLUME": {
+    "description": "Mutes or unmutes the system volume, or sets volume level with --level 0-100",
+    "script": "scripts/MUTE_VOLUME.py",
+    "type": "python",
+    "args": [
+      "--level"
+    ]
+  },
+  "OPEN_BROWSER": {
+    "description": "Opens the default web browser, accepts optional --url to open a specific website or link",
+    "script": "scripts/OPEN_BROWSER.py",
+    "type": "python",
+    "args": [
+      "--url"
+    ]
+  },
+  "SCREENSHOT": {
+    "description": "Takes a screenshot of the screen and saves it to the Desktop",
+    "script": "scripts/SCREENSHOT.py",
+    "type": "python",
+    "args": []
+  },
+  "LIST_FILES": {
+    "description": "Lists files and folders in a directory, accepts --path to specify which directory to list",
+    "script": "scripts/LIST_FILES.py",
+    "type": "python",
+    "args": [
+      "--path"
+    ]
+  },
+  "OPEN_NOTEPAD": {
+    "description": "Opens Notepad text editor",
+    "script": "scripts/OPEN_NOTEPAD.ps1",
+    "type": "powershell",
+    "args": []
+  },
+  "SYSTEM_INFO": {
+    "description": "Shows current system information including CPU usage, RAM usage, disk usage, and battery status",
+    "script": "scripts/SYSTEM_INFO.py",
+    "type": "python",
+    "args": []
+  },
+  "CLOSE_APP": {
+    "description": "Closes or kills a running application by process name, accepts --name with the app name like notepad, chrome, spotify",
+    "script": "scripts/CLOSE_APP.py",
+    "type": "python",
+    "args": [
+      "--name"
+    ]
+  },
+  "SHUTDOWN": {
+    "description": "Shuts down, restarts, or sleeps the computer. Use --action shutdown, restart, or sleep. Optional --delay in seconds",
+    "script": "scripts/SHUTDOWN.py",
+    "type": "python",
+    "args": [
+      "--action",
+      "--delay"
+    ]
+  },
+  "CANCEL_SHUTDOWN": {
+    "description": "Cancels a pending shutdown or restart that was scheduled",
+    "script": "scripts/CANCEL_SHUTDOWN.py",
+    "type": "python",
+    "args": []
+  },
+  "GET_TIME": {
+    "description": "Gets and displays the current date and time",
+    "script": "scripts/GET_TIME.py",
+    "type": "python",
+    "args": []
+  },
+  "TYPE_TEXT": {
+    "description": "Types text at the current cursor position in any window, accepts --text with the text to type",
+    "script": "scripts/TYPE_TEXT.py",
+    "type": "python",
+    "args": [
+      "--text"
+    ]
+  },
+  "SEARCH_GOOGLE": {
+    "description": "Opens a Google search in the browser for a query, accepts --query with the search term",
+    "script": "scripts/SEARCH_GOOGLE.py",
+    "type": "python",
+    "args": [
+      "--query"
+    ]
+  },
+  "SET_BRIGHTNESS": {
+    "description": "Sets the screen brightness level, accepts --level 0-100",
+    "script": "scripts/SET_BRIGHTNESS.py",
+    "type": "python",
+    "args": [
+      "--level"
+    ]
+  },
+  "EMPTY_RECYCLE_BIN": {
+    "description": "Empties the Windows Recycle Bin",
+    "script": "scripts/EMPTY_RECYCLE_BIN.py",
+    "type": "python",
+    "args": []
+  },
+  "CREATE_FOLDER": {
+    "description": "Creates a new folder at the specified path, accepts --path with the full directory path",
+    "script": "scripts/CREATE_FOLDER.py",
+    "type": "python",
+    "args": [
+      "--path"
+    ]
+  },
+  "DELETE_FILE": {
+    "description": "Deletes a file or folder at the given path, accepts --path with the full path to delete",
+    "script": "scripts/DELETE_FILE.py",
+    "type": "python",
+    "args": [
+      "--path"
+    ]
+  },
+  "PLAY_PAUSE_MEDIA": {
+    "description": "Controls media playback: play, pause, next track, previous track, or stop. Accepts --action play, next, prev, or stop",
+    "script": "scripts/PLAY_PAUSE_MEDIA.py",
+    "type": "python",
+    "args": [
+      "--action"
+    ]
+  },
+  "LOCK_SCREEN": {
+    "description": "Locks the Windows screen",
+    "script": "scripts/LOCK_SCREEN.py",
+    "type": "python",
+    "args": []
+  },
+  "OPEN_APP": {
+    "description": "Opens any installed application by name, accepts --name with the app name like spotify, chrome, discord, calculator, vlc, steam, word, excel",
+    "script": "scripts/OPEN_APP.py",
+    "type": "python",
+    "args": [
+      "--name"
+    ]
+  },
+  "CLIPBOARD_COPY": {
+    "description": "Copies text to the clipboard, accepts --text with the text to copy",
+    "script": "scripts/CLIPBOARD_COPY.py",
+    "type": "python",
+    "args": [
+      "--text"
+    ]
+  },
+  "START_OLLLAMA_SERVER": {
+    "description": "Starts the Ollama server. Use this tool to begin Ollama server initialization.",
+    "script": "scripts/START_OLLLAMA_SERVER.py",
+    "type": "python",
+    "args": []
+  },
+
+  "DESCRIBE_SCREEN": {
+    "description": "Use AI (LLaVA vision model) to look at the screen and describe what is visible — open apps, windows, content, errors, buttons. Use when user asks what is on screen, what is open, what does it say, or what do you see. Accepts optional --prompt to ask a specific question about the screen.",
+    "script": "scripts/DESCRIBE_SCREEN.py",
+    "type": "python",
+    "args": ["--prompt", "--region"]
+  },
+
+  "READ_SCREEN": {
+    "description": "OCR the screen to extract all visible text — use when user wants to read text on screen, copy an error message, read a document shown on screen, or extract any text that is visible. Accepts optional --region x y width height to read a specific area.",
+    "script": "scripts/READ_SCREEN.py",
+    "type": "python",
+    "args": ["--region"]
+  },
+
+  "FIND_ON_SCREEN": {
+    "description": "Find a specific text, button, or element on the screen and return its location. Use when user asks where something is on screen or before clicking something. Requires --target with the text or element name to find.",
+    "script": "scripts/FIND_ON_SCREEN.py",
+    "type": "python",
+    "args": ["--target"]
+  },
+
+  "CLICK_ELEMENT": {
+    "description": "Find a button, link, or element on screen by its text or description and click it. Use when user says click, press, or tap something visible on screen. Requires --target with the element name or text. Optional --type left, right, or double.",
+    "script": "scripts/CLICK_ELEMENT.py",
+    "type": "python",
+    "args": ["--target", "--type"]
+  }
+}

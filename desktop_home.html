@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Parallel Desktop 2</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        body {
+            background: linear-gradient(135deg, #070913 0%, #0d1224 50%, #050814 100%);
+            color: #e2e8f0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            user-select: none;
+        }
+        /* Top Desktop Menu Bar */
+        .desktop-menubar {
+            height: 42px;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(0, 210, 255, 0.25);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            z-index: 10;
+        }
+        .menubar-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .desktop-badge {
+            background: rgba(0, 210, 255, 0.15);
+            border: 1px solid #00d2ff;
+            color: #00d2ff;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.8px;
+            padding: 3px 10px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .badge-dot {
+            width: 8px;
+            height: 8px;
+            background: #00d2ff;
+            border-radius: 50%;
+            box-shadow: 0 0 8px #00d2ff;
+            animation: pulseDot 1.6s infinite ease-in-out;
+        }
+        @keyframes pulseDot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.8); }
+        }
+        .menubar-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #f8fafc;
+        }
+        .menubar-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 11px;
+        }
+        .isolation-tag {
+            color: #10b981;
+            background: rgba(16, 185, 129, 0.12);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .mouse-tag {
+            color: #a855f7;
+            background: rgba(168, 85, 247, 0.12);
+            border: 1px solid rgba(168, 85, 247, 0.3);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .clock {
+            font-family: Consolas, monospace;
+            color: #94a3b8;
+            font-size: 12px;
+        }
+
+        /* Desktop Canvas Workspace */
+        .desktop-body {
+            flex: 1;
+            padding: 28px 36px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            position: relative;
+        }
+        .hero-banner {
+            max-width: 680px;
+            margin-top: 20px;
+        }
+        .hero-title {
+            font-size: 32px;
+            font-weight: 800;
+            background: linear-gradient(90deg, #ffffff 0%, #00d2ff 60%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+        .hero-subtitle {
+            font-size: 14px;
+            color: #94a3b8;
+            line-height: 1.6;
+        }
+
+        /* Apps Grid */
+        .apps-container {
+            margin: 36px 0;
+        }
+        .section-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: #64748b;
+            font-weight: 700;
+            margin-bottom: 14px;
+        }
+        .app-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+            gap: 16px;
+            max-width: 900px;
+        }
+        .app-card {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+            text-decoration: none;
+            color: inherit;
+        }
+        .app-card:hover {
+            background: rgba(30, 41, 59, 0.95);
+            border-color: #00d2ff;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 210, 255, 0.18);
+        }
+        .app-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            flex-shrink: 0;
+        }
+        .icon-swiggy {
+            background: linear-gradient(135deg, #fc8019 0%, #e65100 100%);
+            box-shadow: 0 4px 12px rgba(252, 128, 25, 0.35);
+        }
+        .icon-chatgpt {
+            background: linear-gradient(135deg, #10a37f 0%, #0d8a6a 100%);
+            box-shadow: 0 4px 12px rgba(16, 163, 127, 0.35);
+        }
+        .icon-google {
+            background: linear-gradient(135deg, #4285f4 0%, #1a73e8 100%);
+            box-shadow: 0 4px 12px rgba(66, 133, 244, 0.35);
+        }
+        .icon-order {
+            background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.35);
+        }
+        .app-info h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #f1f5f9;
+            margin-bottom: 2px;
+        }
+        .app-info p {
+            font-size: 11px;
+            color: #94a3b8;
+        }
+
+        /* Activity HUD Panel */
+        .hud-panel {
+            background: rgba(15, 23, 42, 0.75);
+            border: 1px solid rgba(0, 210, 255, 0.2);
+            border-radius: 10px;
+            padding: 14px 18px;
+            max-width: 900px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .hud-status-line {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            background: #10b981;
+            border-radius: 50%;
+            box-shadow: 0 0 8px #10b981;
+        }
+        .status-text {
+            font-size: 13px;
+            color: #f1f5f9;
+            font-weight: 500;
+        }
+        .hud-metrics {
+            display: flex;
+            gap: 20px;
+            font-size: 11px;
+            color: #94a3b8;
+        }
+        .hud-metrics span b {
+            color: #00d2ff;
+        }
+
+        /* Taskbar at bottom */
+        .desktop-taskbar {
+            height: 48px;
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(14px);
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            gap: 12px;
+        }
+        .taskbar-brand {
+            font-size: 12px;
+            font-weight: 700;
+            color: #00d2ff;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .url-box {
+            flex: 1;
+            max-width: 600px;
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            padding: 4px 12px;
+            gap: 8px;
+        }
+        .url-box input {
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #f8fafc;
+            font-size: 12px;
+            width: 100%;
+        }
+        .btn-go {
+            background: #00d2ff;
+            color: #020617;
+            border: none;
+            padding: 4px 12px;
+            font-size: 11px;
+            font-weight: 700;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .agent-console {
+            margin-top: 22px;
+            max-width: 900px;
+            padding: 16px 18px;
+            border-radius: 12px;
+            border: 1px solid rgba(0, 210, 255, 0.28);
+            background: rgba(15, 23, 42, 0.82);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+        }
+        .console-header, .console-controls, .approval-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .console-header {
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .console-title {
+            color: #f8fafc;
+            font-size: 14px;
+            font-weight: 700;
+        }
+        .mode-badge {
+            color: #fbbf24;
+            border: 1px solid rgba(251, 191, 36, 0.45);
+            background: rgba(251, 191, 36, 0.10);
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .console-controls input, .console-controls select {
+            min-width: 0;
+            color: #f8fafc;
+            background: #111827;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 12px;
+            outline: none;
+        }
+        .console-controls input { flex: 1; }
+        .console-controls select { width: 174px; }
+        .console-btn {
+            border: 0;
+            border-radius: 6px;
+            padding: 8px 11px;
+            font-size: 11px;
+            font-weight: 700;
+            color: #020617;
+            background: #00d2ff;
+            cursor: pointer;
+        }
+        .console-btn.secondary { color: #dbeafe; background: #334155; }
+        .console-btn.reject { color: #fff1f2; background: #be123c; }
+        .console-help, .task-readout, .approval-copy {
+            margin-top: 10px;
+            color: #94a3b8;
+            font-size: 11px;
+            line-height: 1.45;
+        }
+        .approval-card {
+            display: none;
+            margin-top: 12px;
+            padding: 10px;
+            border: 1px solid rgba(251, 191, 36, 0.35);
+            border-radius: 8px;
+            background: rgba(120, 53, 15, 0.22);
+        }
+        .approval-card.visible { display: block; }
+        .approval-actions { margin-top: 9px; }
+    </style>
+</head>
+<body>
+    <!-- Top Bar -->
+    <div class="desktop-menubar">
+        <div class="menubar-left">
+            <div class="desktop-badge">
+                <div class="badge-dot"></div>
+                DESKTOP 2 (AI CANVAS)
+            </div>
+            <div class="menubar-title">Autonomous Workspace Canvas</div>
+        </div>
+        <div class="menubar-right">
+            <div class="isolation-tag">ISOLATION: 100% CANVAS BOUNDED</div>
+            <div class="mouse-tag">HOST MOUSE: FREE</div>
+            <div class="clock" id="clockDisplay">12:00:00</div>
+        </div>
+    </div>
+
+    <!-- Desktop Workspace Body -->
+    <div class="desktop-body">
+        <div class="hero-banner">
+            <div class="hero-title">Parallel AI Desktop Workspace</div>
+            <p class="hero-subtitle">
+                This desktop canvas runs strictly in parallel with your PC. The AI perceives and interacts exclusively inside this viewport. Your personal desktop, mouse cursor, and open apps remain untouched.
+            </p>
+        </div>
+
+        <section class="agent-console" aria-label="Desktop agent controls">
+            <div class="console-header">
+                <div class="console-title">Desktop Agent Control Center</div>
+                <div class="mode-badge" id="modeBadge">Approval required</div>
+            </div>
+            <div class="console-controls">
+                <input id="taskInput" type="text" placeholder="Describe a task for the agent to track..." maxlength="500">
+                <button class="console-btn" onclick="recordTask()">Set task</button>
+                <select id="permissionMode" onchange="setMode()" aria-label="Permission mode">
+                    <option value="observe">Observe only</option>
+                    <option value="ask" selected>Ask before actions</option>
+                    <option value="routine">Allow routine actions</option>
+                </select>
+            </div>
+            <div class="task-readout" id="taskReadout">No active task. This first version records the task and safely controls browser-canvas actions.</div>
+            <div class="console-help">Observe only blocks automation. Ask before actions queues every canvas action for approval. Routine actions execute browser-canvas actions immediately. System-wide Windows control is not enabled by this panel.</div>
+            <div class="approval-card" id="approvalCard">
+                <div class="approval-copy" id="approvalCopy"></div>
+                <div class="approval-actions">
+                    <button class="console-btn" onclick="approveAction()">Approve action</button>
+                    <button class="console-btn reject" onclick="rejectAction()">Reject</button>
+                </div>
+            </div>
+        </section>
+
+        <div class="apps-container">
+            <div class="section-label">Available Applications & Tasks</div>
+            <div class="app-grid">
+                <a href="https://www.swiggy.com/instamart" class="app-card" id="app-swiggy">
+                    <div class="app-icon icon-swiggy">🛒</div>
+                    <div class="app-info">
+                        <h4>Swiggy Instamart</h4>
+                        <p>Order chocolates & snacks</p>
+                    </div>
+                </a>
+
+                <a href="https://chatgpt.com" class="app-card" id="app-chatgpt">
+                    <div class="app-icon icon-chatgpt">💬</div>
+                    <div class="app-info">
+                        <h4>ChatGPT</h4>
+                        <p>AI collaboration & chat</p>
+                    </div>
+                </a>
+
+                <a href="https://www.google.com" class="app-card" id="app-google">
+                    <div class="app-icon icon-google">🔍</div>
+                    <div class="app-info">
+                        <h4>Google Search</h4>
+                        <p>Web search & browsing</p>
+                    </div>
+                </a>
+
+                <div class="app-card" id="app-order-choc" onclick="window.location.href='https://www.swiggy.com/instamart'">
+                    <div class="app-icon icon-order">🍫</div>
+                    <div class="app-info">
+                        <h4>Order Chocolate</h4>
+                        <p>KitKat / Dairy Milk task</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Activity HUD Panel -->
+        <div class="hud-panel">
+            <div class="hud-status-line">
+                <div class="status-indicator" id="statusDot"></div>
+                <div class="status-text" id="statusText">AI Agent Ready — Awaiting instruction</div>
+            </div>
+            <div class="hud-metrics">
+                <span>Viewport: <b id="viewportSize">1240x800</b></span>
+                <span>Storage: <b>Ephemeral Auto-Purge</b></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Taskbar -->
+    <div class="desktop-taskbar">
+        <div class="taskbar-brand">
+            <span>⚡</span> AI Canvas
+        </div>
+        <div class="url-box">
+            <input type="text" id="urlInput" placeholder="Enter web URL or search query..." value="https://www.swiggy.com/instamart">
+            <button class="btn-go" onclick="navigate()">Go</button>
+        </div>
+    </div>
+
+    <script>
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clockDisplay').textContent = now.toLocaleTimeString();
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        const apiBase = 'http://127.0.0.1:8765';
+
+        async function api(path, options = {}) {
+            const response = await fetch(apiBase + path, {
+                headers: { 'Content-Type': 'application/json' },
+                ...options,
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || 'Request failed');
+            return data;
+        }
+
+        function describeAction(action) {
+            if (!action) return '';
+            if (action.action === 'navigate') return `Navigate to ${action.url}`;
+            if (action.action === 'click' || action.action === 'move') return `${action.action} at (${action.x}, ${action.y})`;
+            if (action.action === 'type') return `Type ${JSON.stringify(action.text || '')}`;
+            if (action.action === 'press') return `Press ${action.key}`;
+            return `Scroll by ${action.delta_y}`;
+        }
+
+        function renderState(state) {
+            const labels = { observe: 'Observe only', ask: 'Approval required', routine: 'Routine actions allowed' };
+            document.getElementById('permissionMode').value = state.mode;
+            document.getElementById('modeBadge').textContent = labels[state.mode] || state.mode;
+            document.getElementById('taskReadout').textContent = state.active_task ? `Active task: ${state.active_task}` : 'No active task. This first version records the task and safely controls browser-canvas actions.';
+            const card = document.getElementById('approvalCard');
+            if (state.pending_action) {
+                document.getElementById('approvalCopy').textContent = `Awaiting your approval: ${describeAction(state.pending_action)}.`;
+                card.classList.add('visible');
+            } else {
+                card.classList.remove('visible');
+            }
+        }
+
+        async function refreshAgentState() {
+            try { renderState(await api('/agent/state')); } catch (_) { /* server is still starting or page is offline */ }
+        }
+
+        async function setMode() {
+            try {
+                const mode = document.getElementById('permissionMode').value;
+                renderState(await api('/agent/mode', { method: 'POST', body: JSON.stringify({ mode }) }));
+            } catch (error) { setStatus(`Unable to update mode: ${error.message}`, true); }
+        }
+
+        async function recordTask() {
+            const task = document.getElementById('taskInput').value.trim();
+            if (!task) return setStatus('Enter a task first.', true);
+            try {
+                renderState(await api('/agent/task', { method: 'POST', body: JSON.stringify({ task }) }));
+                setStatus('Task recorded. Actions remain subject to the selected permission mode.');
+            } catch (error) { setStatus(`Unable to record task: ${error.message}`, true); }
+        }
+
+        async function requestAction(action) {
+            try {
+                const result = await api('/agent/actions/request', { method: 'POST', body: JSON.stringify(action) });
+                renderState(result);
+                setStatus(result.status === 'pending_approval' ? 'Action queued for approval.' : result.status === 'blocked' ? result.reason : 'Action completed.');
+                return result;
+            } catch (error) { setStatus(`Action failed: ${error.message}`, true); }
+        }
+
+        async function approveAction() {
+            try { renderState(await api('/agent/actions/approve', { method: 'POST' })); setStatus('Approved action completed.'); }
+            catch (error) { setStatus(`Approval failed: ${error.message}`, true); }
+        }
+
+        async function rejectAction() {
+            try { renderState(await api('/agent/actions/reject', { method: 'POST' })); setStatus('Pending action rejected.'); }
+            catch (error) { setStatus(`Reject failed: ${error.message}`, true); }
+        }
+
+        function setStatus(message, isError = false) {
+            document.getElementById('statusText').textContent = message;
+            document.getElementById('statusDot').style.background = isError ? '#fb7185' : '#10b981';
+        }
+
+        async function navigate() {
+            let url = document.getElementById('urlInput').value.trim();
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                url = 'https://' + url;
+            }
+            await requestAction({ action: 'navigate', url });
+        }
+
+        document.getElementById('urlInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') navigate();
+        });
+
+        window.addEventListener('resize', () => {
+            document.getElementById('viewportSize').textContent = `${window.innerWidth}x${window.innerHeight}`;
+        });
+        document.getElementById('viewportSize').textContent = `${window.innerWidth}x${window.innerHeight}`;
+        refreshAgentState();
+        setInterval(refreshAgentState, 1200);
+    </script>
+</body>
+</html>
