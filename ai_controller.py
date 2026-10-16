@@ -99,6 +99,11 @@ class DesktopAgentController:
         return TypingEngine(profile=profile).type_text(text=text, introduce_typos=typos)
 
     def paste_text(self, text: str) -> None:
+        """Paste bulk text through the clipboard instead of simulating each key.
+
+        Prefer this for long emails, prompts, and reports. Use type_text() when
+        realistic per-key input is specifically needed by the target application.
+        """
         fast_paste(text)
 
     def press_key(self, key: str) -> None:

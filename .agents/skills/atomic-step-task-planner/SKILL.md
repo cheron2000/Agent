@@ -10,8 +10,15 @@ description: >-
 
 The **Atomic Step Task Planner** transforms high-level, complex GUI and desktop automation requests into an explicit, sequential execution plan composed of atomic sub-tasks. 
 
-### Mandatory Core Rule: Verify Every Single Step
-**NEVER execute actions blindly in sequence.** Every atomic sub-task must be followed immediately by visual inspection (screenshot capture + OCR / contour / element assertion) to confirm the expected post-condition before the agent proceeds to the next sub-task.
+### Mandatory Core Rule: Verify Meaningful State Changes
+**Never execute uncertain or consequential actions blindly.** Every step must define an expected success condition, but the verification method and frequency must fit the action.
+
+- Batch deterministic, low-risk actions that share a known target (for example, fill a known search field and submit it) when no intermediate decision is needed.
+- Re-observe after navigation, submission, unexpected dialogs/errors, failed actions, and consequential operations.
+- Do not capture a screenshot and run full OCR after every character, keypress, or deterministic action when no decision depends on the intermediate state.
+- Prefer lightweight checks first: active-window/title, focus, input value, URL, DOM/accessibility state, or an expected element/text assertion.
+- Use screenshot + OCR/vision when the state is ambiguous, structural metadata is unavailable, or visual verification is actually required.
+- Prefer condition-based waits; fixed delays are bounded fallbacks, not the default synchronization strategy.
 
 ---
 
@@ -73,12 +80,12 @@ For every step $S_i$ in the plan:
                   └───────────────┬───────────────┘
                                   ▼
                   ┌───────────────────────────────┐
-                  │ 3. Settle Delay (0.2s - 2.0s) │
+                  │ 3. Wait for condition (bounded)│
                   └───────────────┬───────────────┘
                                   ▼
                   ┌───────────────────────────────┐
-                  │ 4. Capture & Per-Step OCR     │
-                  │    POST /eyes/capture & OCR   │
+                  │ 4. Verify expected state      │
+                  │    DOM/value/window first     │
                   └───────────────┬───────────────┘
                                   ▼
                     /───────────────────────────\
@@ -191,6 +198,6 @@ class AtomicStepExecutor:
 
 ## 5. Summary of Best Practices
 
-1. **Keep Steps Atomic**: Never combine "click address bar, type URL, press enter, and wait for login form" into one unmonitored step. Split them so failure at any point is identified immediately.
+1. **Keep Decision Boundaries Explicit**: Combine deterministic actions only when they share a known target and no intermediate decision is required. For example, filling a known address bar and pressing Enter can be one action sequence, followed by navigation verification. Split actions when the next target depends on the preceding state.
 2. **Dynamic Offset Awareness**: Recognize that error banners, dropdown menus, and responsive layouts can shift coordinates (e.g. login boxes shifting downwards by 65px when an error message appears). Always verify bounding boxes when coordinates change.
 3. **Graceful Recovery**: When a step fails confirmation, do not blindly repeat the exact same broken input. Inspect the screenshot to see if a tooltip, passkey popup, or dialogue blocked the target, dismiss it with `Escape`, and re-attempt.
