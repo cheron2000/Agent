@@ -92,7 +92,38 @@ class ActionOrchestrator:
         """
         clean_query = query.strip().lower()
 
-        # Tier 1: Check UIA element names & automation IDs
+        # Tier 1: Relational Semantic Scene Graph query (handles 'Cancel in Settings', 'field next to Username')
+        try:
+            from Eyes.scene_graph import build_scene_graph
+            from Eyes.schema import UIElement
+
+            ui_els = []
+            for e in observation.get("elements", []):
+                if isinstance(e, dict):
+                    ui_els.append(UIElement(
+                        id=e.get("id", 0),
+                        role=e.get("role", "Control"),
+                        name=e.get("name", ""),
+                        box=list(e.get("box", [0, 0, 0, 0])),
+                        center=tuple(e.get("center", (0, 0))),
+                        source=e.get("source", "uia"),
+                    ))
+                elif isinstance(e, UIElement):
+                    ui_els.append(e)
+
+            if ui_els:
+                graph = build_scene_graph(
+                    ui_els,
+                    active_window=observation.get("active_window", ""),
+                    observation_id=observation.get("observation_id", ""),
+                )
+                hit = graph.query_target(query)
+                if hit:
+                    return tuple(hit.center)
+        except Exception as ex:
+            logger.debug("Scene graph resolution skipped: %s", ex)
+
+        # Tier 2: Direct UIA element names & automation IDs
         for el in observation.get("elements", []):
             name = el.get("name", "").strip().lower()
             auto_id = el.get("automation_id", "").strip().lower()
@@ -101,7 +132,7 @@ class ActionOrchestrator:
                 if center:
                     return tuple(center)
 
-        # Tier 2: Check OCR text lines
+        # Tier 3: OCR text lines
         text_lines = observation.get("text", "").splitlines()
         for line in text_lines:
             if clean_query in line.lower():

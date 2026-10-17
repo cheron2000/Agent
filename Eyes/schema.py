@@ -53,6 +53,21 @@ class Observation:
     created_at: float = field(default_factory=time.time)
     mode: str = "balanced"
     timings: Dict[str, float] = field(default_factory=dict)
+    scene_graph: Optional[Any] = None
+
+    def get_scene_graph(self) -> Any:
+        if self.scene_graph is not None:
+            return self.scene_graph
+        try:
+            from .scene_graph import build_scene_graph
+        except (ImportError, ValueError):
+            from Eyes.scene_graph import build_scene_graph
+        self.scene_graph = build_scene_graph(
+            self.elements,
+            active_window=self.active_window,
+            observation_id=self.observation_id,
+        )
+        return self.scene_graph
 
     def get_element(self, element_id: Union[int, str]) -> Optional[UIElement]:
         try:
