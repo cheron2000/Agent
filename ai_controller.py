@@ -113,6 +113,11 @@ class DesktopAgentController:
         """Wait until target text appears on screen."""
         return eyes.wait_for_text(target=target, timeout_s=timeout_s)
 
+    def ground_target(self, instruction: str, min_confidence: float = 0.4) -> Dict[str, Any]:
+        """Locate candidates for a visual or icon-only control matching natural language instruction."""
+        return eyes.ground_target(instruction=instruction, min_confidence=min_confidence)
+
+
     def click_element(
         self,
         element_id: int,
