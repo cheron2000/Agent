@@ -10,12 +10,20 @@ Comprehensive regression tests for Eyes optimization features:
 - Public API backwards compatibility
 """
 
+import sys
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 import numpy as np
 from PIL import Image
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if str(ROOT / "Eyes") not in sys.path:
+    sys.path.insert(0, str(ROOT / "Eyes"))
 
 import eyes
 from Eyes.coords import box_center, box_iou, get_screen_size
@@ -276,3 +284,7 @@ def test_desktop_controller_api_compatibility():
         assert click_res["success"] is True
         mock_resolve.assert_called_with(1, observation_id="obs_ctrl_1")
         mock_click.assert_called_with(x=20, y=20, button="left", clicks=1)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__]))
