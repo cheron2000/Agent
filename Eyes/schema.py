@@ -1,6 +1,6 @@
-"""Data schemas for UI elements and full screen observations."""
+﻿"""Data schemas for UI elements and full screen observations."""
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 import threading
 import time
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -109,7 +109,7 @@ class Observation:
         }
 
 
-# ── Observation Store / Cache (Bounded & Thread-Safe) ────────────────────────
+# â”€â”€ Observation Store / Cache (Bounded & Thread-Safe) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _MAX_OBSERVATIONS_HISTORY = 10
 _CURRENT_OBSERVATION: Optional[Observation] = None
 _OBSERVATIONS_HISTORY: Dict[str, Observation] = {}
@@ -162,4 +162,5 @@ def resolve_element(element_id: int, observation_id: Optional[str] = None) -> Op
         if not target_obs:
             return None
         return target_obs.get_element(element_id)
+
 

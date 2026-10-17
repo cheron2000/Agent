@@ -1,4 +1,4 @@
-"""Context reasoning and situational decision analyzer."""
+﻿"""Context reasoning and situational decision analyzer."""
 
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -61,9 +61,9 @@ class ContextAnalyzer:
             confidence=0.8,
         )
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Sub-analyzers
-    # ─────────────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _check_profile_picker(
         self, active_window: str, elements: List[Dict[str, Any]]
@@ -221,17 +221,12 @@ class ContextAnalyzer:
 
         # Check for login inputs
         user_field = None
-        pass_field = None
-        login_btn = None
         for el in elements:
             role = el.get("role")
             name_lower = (el.get("name") or "").lower()
             if role == "Edit" and ("mobile" in name_lower or "username" in name_lower or "email" in name_lower):
                 user_field = el
-            elif role == "Edit" and "password" in name_lower:
-                pass_field = el
-            elif role == "Button" and "log in" in name_lower and "facebook" not in name_lower:
-                login_btn = el
+                break
 
         if user_field:
             return ContextReport(
