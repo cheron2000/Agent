@@ -115,6 +115,11 @@ class DesktopAgentClient:
         """Poll the desktop until target text appears."""
         return self._post("/eyes/wait", {"target": target, "timeout_s": timeout_s})
 
+    # ── Context Layer ────────────────────────────────────────────────────────
+    def analyze_context(self, goal: Optional[str] = None) -> Dict[str, Any]:
+        """Analyze current screen context, formulate situational rationale, and suggest next action."""
+        return self._post("/context/analyze", {"goal": goal})
+
 
     # ── Physical Desktop Actions ─────────────────────────────────────────────
     def windows(self, include_windows: bool = True) -> Dict[str, Any]:

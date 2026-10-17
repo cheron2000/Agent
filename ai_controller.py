@@ -36,13 +36,25 @@ logger.addHandler(_console_handler)
 
 import eyes
 from agent_hands.engine import TypingEngine
-from agent_hands.keyboard import fast_paste, press_single_key
+from agent_hands.keyboard import fast_paste, press_single_key, execute_hotkey
 from agent_hands.mouse import click, move_to, scroll
 from agent_hands.windows import focus_window, get_active_window_title, list_windows
 
+try:
+    from Context import ContextAnalyzer, ContextReport
+except ImportError:
+    try:
+        from .Context import ContextAnalyzer, ContextReport
+    except ImportError:
+        ContextAnalyzer = None
+        ContextReport = None
+
 
 class DesktopAgentController:
-    """Perceive and operate the user's actual desktop through Eyes and AgentHands."""
+    """Perceive and operate the user's actual desktop through Eyes, Context, and AgentHands."""
+
+    def __init__(self):
+        self.context = ContextAnalyzer() if ContextAnalyzer else None
 
     @contextmanager
     def task(self, task_name: str = "desktop_task"):
@@ -149,6 +161,51 @@ class DesktopAgentController:
 
     def press_key(self, key: str) -> None:
         press_single_key(key)
+
+    def hotkey(self, *keys: str) -> None:
+        """Execute a key combination with natural human staggering (e.g. 'ctrl', 't')."""
+        execute_hotkey(list(keys))
+
+    # ── Context Layer Integration ────────────────────────────────────────────
+    def analyze_context(self, observation: Optional[Any] = None, goal: Optional[str] = None) -> Any:
+        """Analyze current screen context, formulate situational rationale, and suggest next action."""
+        if self.context is None:
+            raise RuntimeError("Context engine is not available.")
+        obs = observation if observation is not None else self.observe(annotate=True)
+        return self.context.analyze(obs, goal=goal)
+
+    def step_with_context(self, goal: Optional[str] = None, execute: bool = True) -> Dict[str, Any]:
+        """Perform one autonomous OODA loop step: Observe -> Contextualize -> Act.
+        
+        Analyzes the current screen, logs the human-readable utterance (reasoning),
+        and executes the recommended action if execute=True.
+        """
+        obs = self.observe(annotate=True)
+        report = self.analyze_context(observation=obs, goal=goal)
+        logger.info("[Context] %s", report.utterance)
+
+        action_result = None
+        if execute and report.recommendation:
+            rec = report.recommendation
+            act_type = rec.action_type
+            if act_type == "click_element" and rec.target_id is not None:
+                action_result = self.click_element(rec.target_id)
+            elif act_type == "hotkey" and rec.hotkey:
+                self.hotkey(*rec.hotkey)
+                action_result = {"status": "success", "action": "hotkey", "keys": rec.hotkey}
+            elif act_type == "type_text" and rec.text:
+                action_result = self.type_text(rec.text)
+            elif act_type == "wait":
+                time.sleep(rec.params.get("seconds", 2.0))
+                action_result = {"status": "success", "action": "wait"}
+
+        return {
+            "success": True,
+            "report": report.to_dict(),
+            "utterance": report.utterance,
+            "action_result": action_result,
+            "executed": execute,
+        }
 
 
 if __name__ == "__main__":

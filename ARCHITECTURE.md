@@ -10,20 +10,25 @@ The system lets an agent work directly on the current Windows desktop using the 
 flowchart TD
     R[Agent or task runner] --> C[DesktopAgentController]
     C --> E[Eyes]
+    C --> X[Context Engine]
     C --> H[AgentHands]
-    E -->|Windows GDI / PIL capture| D[Actual visible desktop]
-    E -->|Tesseract OCR / optional vision model| P[Perception result]
+    E -->|Windows GDI / BitBlt capture| D[Actual visible desktop]
+    E -->|UIA + OCR + CV Elements| X
+    X -->|Situational Analysis & Utterance| C
+    C -->|Act by ID or Hotkey| H
     H -->|PyAutoGUI and Win32| D
-    P --> R
 ```
 
 ## Components
 
 | Component | Role |
 | --- | --- |
-| `ai_controller.py` | `DesktopAgentController`: direct high-level façade for perception (`observe`, `zoom`, `wait_for_text`), window inspection, mouse, keyboard, and task screenshot cleanup. |
-| `agent_server.py` | Loopback-only authenticated FastAPI service exposing direct `/eyes/*` and `/hands/*` operations with Bearer auth, DNS rebinding protection, and input concurrency locks. |
-| `api_client.py` | Python client for `agent_server.py` with automatic bearer token discovery and task session context manager. |
+| `ai_controller.py` | `DesktopAgentController`: direct high-level façade for perception (`observe`, `zoom`, `wait_for_text`), situational context (`analyze_context`, `step_with_context`), window inspection, mouse, keyboard, and task screenshot cleanup. |
+| `agent_server.py` | Loopback-only authenticated FastAPI service exposing direct `/eyes/*`, `/context/*`, and `/hands/*` operations with Bearer auth, DNS rebinding protection, and input concurrency locks. |
+| `api_client.py` | Python client for `agent_server.py` with automatic bearer token discovery, context reasoning, and task session context manager. |
+| `Context/` | Cognitive reasoning layer analyzing screenshots/observations, formulating human-understandable rationale ("utterances"), and suggesting adaptive next actions. |
+| `Context/context_schema.py` | Dataclasses for `ScreenState`, `ActionRecommendation`, and `ContextReport`. |
+| `Context/analyzer.py` | `ContextAnalyzer`: rules and pattern recognizers for browser profiles, occupied tabs, modal dialogs, and authentication flows. |
 | `Eyes/eyes.py` | Primary perception façade delegating to modular perception subsystems; manages screenshot lifecycles and caches. |
 | `Eyes/coords.py` | Per-monitor DPI awareness initialization, bounding box math, coordinate clamping, and IoU computation. |
 | `Eyes/schema.py` | Standardized `UIElement` and `Observation` dataclasses with element caching and ID-to-point coordinate resolution. |

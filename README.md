@@ -125,6 +125,8 @@ with client.task("automated_task"):
 | Need | Method | Description |
 | --- | --- | --- |
 | Grounded UI Observation | `observe(annotate=True)` | Hybrid UIA + tuned OCR + CV detection with Set-of-Marks visual badges |
+| Situational Context Reasoning | `analyze_context(goal=...)` | Evaluates screen situation and produces explanatory utterance and action proposal |
+| Autonomous Context Step | `step_with_context(goal=...)` | Performs full loop: observe -> assess situation -> state reasoning -> execute next action |
 | Click UI Element by ID | `click_element(id)` | Resolves element ID from last observation to physical center coordinates |
 | Zoom & Re-OCR Crop | `zoom(box_or_region, scale=3)` | High-resolution cropped observation for small buttons or blurry text |
 | Wait for UI Text / State | `wait_for_text(text, timeout=10)` | Polling synchronization loop with screen change diffing |

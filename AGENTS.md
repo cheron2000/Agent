@@ -9,7 +9,7 @@
 
 ## 1. The Core Mental Model: The Agent Loop
 
-Every automation task must adhere to the **Observe → Reason → Act → Verify** loop:
+Every automation task must adhere to the **Observe → Contextualize → Reason → Act → Verify** loop:
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
@@ -20,21 +20,31 @@ Every automation task must adhere to the **Observe → Reason → Act → Verify
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ 2. REASON (By Element ID)                                    │
-│    Locate target by semantic attributes (name, role)         │
+│ 2. CONTEXTUALIZE (Situational Assessment)                    │
+│    Call desktop.analyze_context()                            │
+│    Understands screen state & formulates human explanation:  │
+│    - "Multiple Chrome profiles detected -> pick default"     │
+│    - "Tab occupied with other work -> open new tab"          │
+│    - "Instagram form detected -> click username to autofill" │
+└──────────────────────────────┬───────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 3. REASON (By Element ID)                                    │
+│    Locate target by semantic attributes (name, role, ID)     │
 │    CRITICAL: NEVER calculate or guess raw (x, y) coordinates!│
 └──────────────────────────────┬───────────────────────────────┘
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ 3. ACT                                                       │
-│    Call desktop.click_element(target_id) or type_text(...)   │
+│ 4. ACT                                                       │
+│    Call desktop.click_element(target_id) or hotkey(...)      │
 │    Hands resolves ID to physical coordinates automatically   │
 └──────────────────────────────┬───────────────────────────────┘
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ 4. VERIFY                                                    │
+│ 5. VERIFY                                                    │
 │    Verify state change (window title, wait_for_text, diff)   │
 │    Only advance to next step once post-condition is verified │
 └──────────────────────────────────────────────────────────────┘
@@ -49,8 +59,9 @@ You do not need to understand every internal file. The interface is organized in
 | Component | File | How to Use It |
 |---|---|---|
 | **Primary Controller Facade** | `ai_controller.py` | Import `DesktopAgentController`. This is your main entry point for python tasks. |
+| **Cognitive Context Engine** | `Context/` | Accessed via `desktop.analyze_context()` and `desktop.step_with_context()`. Assesses situations and forms utterances. |
 | **Vision & Grounding Engine** | `Eyes/` | Accessed via `desktop.observe()`, `desktop.zoom()`, `desktop.wait_for_text()`, and `desktop.transcribe()`. |
-| **Physical Hands Engine** | `Hands/agent_hands` | Accessed via `desktop.click_element()`, `desktop.move()`, `desktop.type_text()`, `desktop.press_key()`, `desktop.focus()`. |
+| **Physical Hands Engine** | `Hands/agent_hands` | Accessed via `desktop.click_element()`, `desktop.move()`, `desktop.type_text()`, `desktop.hotkey()`, `desktop.focus()`. |
 | **Local REST Server** | `agent_server.py` | Local FastAPI service listening on `http://127.0.0.1:8765`. |
 | **REST API Client** | `api_client.py` | Import `DesktopAgentClient` if you prefer interacting over HTTP with bearer authentication. |
 | **Atomic Planner Skill** | `.agents/skills/atomic-step-task-planner/SKILL.md` | The methodology for planning multi-step desktop workflows. |
@@ -181,6 +192,26 @@ with client.task("remote_task"):
     # Type text
     client.type_text("Search query")
     client.press_key("enter")
+```
+
+### Recipe 7: Situational Context & Adaptive Utterances
+Before acting, use the Context layer to assess the situation and formulate human-understandable reasoning:
+
+```python
+from ai_controller import DesktopAgentController
+
+desktop = DesktopAgentController()
+
+with desktop.task("browser_navigation"):
+    # 1. Analyze situation & get human-readable utterance
+    report = desktop.analyze_context(goal="instagram")
+    print(f"Situation : {report.situation}")
+    print(f"Utterance : {report.utterance}")
+    # Example: "Something is already present in this Chrome tab ('Review PR'), so I'll create a new tab."
+    
+    # 2. Or perform an autonomous step (analyzes, states reasoning, and executes next action)
+    step_result = desktop.step_with_context(goal="instagram", execute=True)
+    print("Action result:", step_result["action_result"])
 ```
 
 ---

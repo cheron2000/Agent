@@ -24,9 +24,9 @@ if os.path.join(ROOT, "Eyes") not in sys.path:
     sys.path.insert(0, os.path.join(ROOT, "Eyes"))
 if os.path.join(ROOT, "Hands") not in sys.path:
     sys.path.insert(0, os.path.join(ROOT, "Hands"))
-
 try:
     import eyes
+    from Context import ContextAnalyzer
     import agent_hands.keyboard as hands_keyboard
     import agent_hands.mouse as hands_mouse
     from agent_hands.engine import TypingEngine
@@ -35,6 +35,10 @@ except ImportError as err:
     # Fallback to direct path resolution
     sys.path.extend([os.path.join(ROOT, "Eyes"), os.path.join(ROOT, "Hands")])
     import eyes
+    try:
+        from Context import ContextAnalyzer
+    except ImportError:
+        ContextAnalyzer = None
     import agent_hands.keyboard as hands_keyboard
     import agent_hands.mouse as hands_mouse
     from agent_hands.engine import TypingEngine
@@ -249,6 +253,11 @@ class ClickElementRequest(BaseModel):
     clicks: int = Field(default=1, ge=1, le=3)
 
 
+class ContextAnalyzeRequest(BaseModel):
+    goal: Optional[str] = None
+    observation: Optional[Dict[str, Any]] = None
+
+
 
 # ── Routes: Health & Perception (Eyes) ───────────────────────────────────────
 @app.get("/health")
@@ -331,6 +340,20 @@ def eyes_zoom(req: ZoomRequest, _: str = Depends(verify_auth)) -> Dict[str, Any]
 def eyes_wait(req: WaitRequest, _: str = Depends(verify_auth)) -> Dict[str, Any]:
     with _eyes_lock:
         return eyes.wait_for_text(target=req.target, timeout_s=req.timeout_s)
+
+
+# ── Routes: Context Reasoning & Decision ─────────────────────────────────────
+@app.post("/context/analyze")
+def context_analyze(req: ContextAnalyzeRequest, _: str = Depends(verify_auth)) -> Dict[str, Any]:
+    with _eyes_lock:
+        obs = req.observation
+        if not obs:
+            obs = eyes.observe(save_annotated=False)
+        if not ContextAnalyzer:
+            raise HTTPException(status_code=500, detail="Context engine is not loaded.")
+        analyzer = ContextAnalyzer()
+        report = analyzer.analyze(obs, goal=req.goal)
+        return report.to_dict()
 
 
 
