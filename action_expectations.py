@@ -75,10 +75,10 @@ class ActionIntent:
 
     def sanitized_parameters(self) -> Dict[str, Any]:
         """Return parameters dictionary with sensitive fields redacted."""
-        if not self.is_sensitive:
+        if not (self.is_sensitive or self.risk_level == ActionRiskLevel.SENSITIVE):
             return dict(self.parameters)
         sanitized = dict(self.parameters)
-        for key in ["text", "password", "token", "secret", "value"]:
+        for key in ["text", "password", "token", "secret", "value", "api_key", "key"]:
             if key in sanitized:
                 sanitized[key] = "***REDACTED***"
         return sanitized

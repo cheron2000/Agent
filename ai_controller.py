@@ -54,11 +54,13 @@ try:
     from action_expectations import ActionExpectation, ActionIntent, ActionRiskLevel, ActionState
     from action_verifier import ActionVerifier, VerificationEvidence, VerificationStatus
     from action_recovery import ActionRecoveryDecider, RecoveryDecision, RecoveryStrategy
+    from action_orchestrator import ActionOrchestrator
 except ImportError:
     try:
         from .action_expectations import ActionExpectation, ActionIntent, ActionRiskLevel, ActionState
         from .action_verifier import ActionVerifier, VerificationEvidence, VerificationStatus
         from .action_recovery import ActionRecoveryDecider, RecoveryDecision, RecoveryStrategy
+        from .action_orchestrator import ActionOrchestrator
     except ImportError:
         ActionExpectation = None
         ActionIntent = None
@@ -70,6 +72,7 @@ except ImportError:
         ActionRecoveryDecider = None
         RecoveryDecision = None
         RecoveryStrategy = None
+        ActionOrchestrator = None
 
 
 class DesktopAgentController:
@@ -79,6 +82,11 @@ class DesktopAgentController:
         self.context = ContextAnalyzer() if ContextAnalyzer else None
         self.verifier = ActionVerifier() if ActionVerifier else None
         self.recovery_decider = ActionRecoveryDecider() if ActionRecoveryDecider else None
+        self.orchestrator = ActionOrchestrator(
+            controller=self,
+            verifier=self.verifier,
+            recovery_decider=self.recovery_decider,
+        ) if ActionOrchestrator else None
 
     @contextmanager
     def task(self, task_name: str = "desktop_task"):
@@ -335,6 +343,16 @@ class DesktopAgentController:
             "verification": evidence.to_dict(),
             "recovery_decision": recovery_decision.to_dict() if recovery_decision else None,
         }
+
+    def orchestrate_action(
+        self,
+        intent: Any,
+        pre_observation: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Orchestrate an action with closed-loop target resolution, verification, and recovery."""
+        if self.orchestrator is None:
+            raise RuntimeError("ActionOrchestrator is not available.")
+        return self.orchestrator.execute_step(intent, pre_observation=pre_observation)
 
 
 if __name__ == "__main__":

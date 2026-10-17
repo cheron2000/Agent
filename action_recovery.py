@@ -24,6 +24,7 @@ logger = logging.getLogger("action_recovery")
 
 
 class RecoveryStrategy(str, Enum):
+    NO_RECOVERY_NEEDED = "no_recovery_needed"  # Action succeeded; no recovery required
     RETRY_SAFE = "retry_safe"                  # Re-dispatch safe idempotent action (max once)
     RE_RESOLVE_TARGET = "re_resolve_target"    # Re-observe screen and re-locate target
     DISMISS_MODAL = "dismiss_modal"            # Dismiss blocking dialog (ESC or cancel)
@@ -72,7 +73,7 @@ class ActionRecoveryDecider:
         # If action was confirmed, no recovery needed
         if evidence.status == VerificationStatus.CONFIRMED:
             return RecoveryDecision(
-                strategy=RecoveryStrategy.RETRY_SAFE,
+                strategy=RecoveryStrategy.NO_RECOVERY_NEEDED,
                 allowed=False,
                 reason="Action already confirmed; no recovery necessary",
                 retry_count=0,
