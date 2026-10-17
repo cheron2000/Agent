@@ -30,5 +30,8 @@ Thumbs.db
 .vscode/
 token.txt
 *token*
+.agent_token
+err.log
 *.key
 *.pem
+

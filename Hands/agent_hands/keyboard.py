@@ -7,8 +7,8 @@ import pyperclip
 
 from .windows import ensure_interactive_desktop
 
-# Keyboard operations should not trigger mouse-corner fail-safe
-pyautogui.FAILSAFE = False
+# PyAutoGUI fail-safe settings
+pyautogui.FAILSAFE = True
 
 # Common key alias normalizer
 KEY_ALIASES = {
@@ -86,8 +86,26 @@ def execute_hotkey(keys: Union[List[str], str], step_delay: float = 0.04) -> Non
         time.sleep(step_delay)
 
 
-def fast_paste(text: str) -> None:
-    """Paste large text blocks directly via system clipboard using Ctrl+V."""
+def fast_paste(text: str, restore_clipboard: bool = False) -> None:
+    """Paste large text blocks directly via system clipboard using Ctrl+V.
+    
+    If restore_clipboard is True, the previous clipboard content is preserved
+    and restored after the paste operation.
+    """
+    previous = None
+    if restore_clipboard:
+        try:
+            previous = pyperclip.paste()
+        except Exception:
+            previous = None
+
     pyperclip.copy(text)
     time.sleep(0.05)
     execute_hotkey(["ctrl", "v"])
+
+    if restore_clipboard and previous is not None:
+        time.sleep(0.05)
+        try:
+            pyperclip.copy(previous)
+        except Exception:
+            pass

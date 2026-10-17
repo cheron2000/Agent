@@ -6,8 +6,8 @@ import pyautogui
 
 from .windows import ensure_interactive_desktop, focus_window
 
-# Disable PyAutoGUI corner fail-safe to prevent crashes when cursor is parked at (0, 0)
-pyautogui.FAILSAFE = False
+# Enable PyAutoGUI corner fail-safe as documented for emergency stop
+pyautogui.FAILSAFE = True
 
 # ── Canvas Bounding ─────────────────────────────────────────────────────────
 _ACTIVE_CANVAS_BOUNDS: Optional[Tuple[int, int, int, int]] = None

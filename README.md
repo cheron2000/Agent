@@ -1,13 +1,16 @@
 # Windows Desktop Agent
 
-This project is a direct Windows desktop automation stack. It has no canvas, desktop mirror, browser sandbox, or companion panel.
+[![CI](https://github.com/cheron2000/Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/cheron2000/Agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+A direct Windows desktop automation stack. The agent operates the actual visible Windows desktop using physical mouse, keyboard, OCR, and vision primitives. There is no canvas, desktop mirror, browser sandbox, or companion panel.
 
 An agent operates the actual desktop you are using:
 
 - **Eyes** captures the visible screen, performs OCR, finds visible text, and can describe screen content.
 - **AgentHands** sends real Windows mouse and keyboard input through PyAutoGUI and Win32 helpers.
 - **`ai_controller.py`** combines both into one Python interface for an agent.
-- **`agent_server.py`** and **`api_client.py`** optionally expose the same direct-desktop capabilities over localhost HTTP.
+- **`agent_server.py`** and **`api_client.py`** expose the same direct-desktop capabilities over an authenticated localhost REST API.
 
 ## Architecture
 
@@ -28,17 +31,16 @@ Actual Windows desktop and active applications
 
 ## Setup
 
-This project is Windows-oriented. Install the dependencies in a virtual environment:
+This project is Windows-oriented. Install dependencies in a virtual environment:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-pip install pytesseract opencv-python numpy mcp
 pip install -e .\Hands
 ```
 
-Install the Tesseract OCR executable separately and ensure it is available on `PATH`. `Eyes/eyes.py` also checks common Windows Tesseract installation locations.
+Install the Tesseract OCR executable separately and ensure it is available on `PATH`. `Eyes/eyes.py` also checks common Windows Tesseract installation locations (`C:\Program Files\Tesseract-OCR\tesseract.exe`).
 
 ## Use from Python
 
@@ -56,13 +58,36 @@ with desktop.task("read_and_search"):
         desktop.press_key("enter")
 ```
 
-## Optional local API
+## Authenticated Local REST API
+
+To start the local agent server:
 
 ```powershell
 python agent_server.py
 ```
 
-The server listens on `http://127.0.0.1:8765/docs` and exposes only `/eyes/*` and `/hands/*` routes. It has no canvas or browser endpoints.
+The server listens on `http://127.0.0.1:8765/docs` and exposes `/eyes/*` and `/hands/*` routes.
+
+### Security & Concurrency
+- **Bearer Token Auth**: All operational endpoints require bearer token authentication. On startup, the server reads `AGENT_AUTH_TOKEN` from the environment or securely generates a 32-character token saved to `.agent_token` (ignored by git).
+- **DNS Rebinding Protection**: Validates the `Host` header to reject cross-origin DNS rebinding attacks from browsers.
+- **Input Concurrency Locking**: Physical keyboard and mouse endpoints are synchronized via a mutex lock to prevent interleaving from concurrent requests.
+- **Clipboard Preservation**: `/hands/paste` automatically preserves and restores clipboard content.
+- **Corner Fail-Safe**: PyAutoGUI corner emergency fail-safe is enabled. Moving the cursor to any screen corner immediately halts automation.
+
+### API Client Usage
+
+```python
+from api_client import DesktopAgentClient
+
+# Token is auto-discovered from AGENT_AUTH_TOKEN or .agent_token
+client = DesktopAgentClient()
+
+with client.task("automated_task"):
+    info = client.screen_info()
+    client.click(500, 300)
+    client.type_text("Hello desktop", profile="natural")
+```
 
 ## Capabilities
 
@@ -78,17 +103,18 @@ The server listens on `http://127.0.0.1:8765/docs` and exposes only `/eyes/*` an
 | Scroll current app | `scroll()` |
 | Send keyboard input | `type_text()`, `paste_text()`, `press_key()` |
 
-## Screenshot cleanup
+## Screenshot Cleanup
 
-Use `with desktop.task("name"):` when a task captures screenshots. Eyes tracks task screenshots and deletes them when the context exits. Captures made outside a task can remain in `Eyes/screenshots/`.
+Use `with desktop.task("name"):` (or `with client.task("name"):`) when a task captures screenshots. Eyes tracks task screenshots and automatically purges them when the context exits.
 
-## Important behavior
+## Testing
 
-This controller acts on the real desktop, not a copy:
+Run the automated test suite with pytest:
 
-- Mouse movement and clicks affect your actual Windows applications.
-- Typing goes to the focused application.
-- Moving the cursor to a screen corner triggers PyAutoGUI's emergency fail-safe.
-- OCR and visual description only see what is currently visible to the process.
+```powershell
+pytest -v
+```
 
-`Eyes/README.md` and `Hands/README.md` describe their REST, MCP, CLI, and library interfaces in more detail.
+## License
+
+This project is licensed under the [MIT License](LICENSE).
