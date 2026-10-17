@@ -154,7 +154,7 @@ def extract_ocr_elements(
     if not is_tesseract_available():
         return []
 
-    norm_offset = (int(offset[0]), int(offset[1])) if offset and len(offset) >= 2 else (0, 0)
+    norm_offset = (offset[0], offset[1]) if offset and len(offset) >= 2 else (0, 0)
 
     # Check LRU cache
     img_hash = _compute_image_hash(image) if use_cache else ""

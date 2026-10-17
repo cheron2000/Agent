@@ -25,6 +25,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, Union, List, Tuple
 from contextlib import contextmanager
+from PIL import Image
+
 
 try:
     from .coords import box_center, get_screen_size
@@ -203,13 +205,12 @@ def _ensure_input_desktop():
             pass
 
 
-def _win32_gdi_grab(region: Optional[Tuple[int, int, int, int]] = None):
+def _win32_gdi_grab(region: Optional[Tuple[int, int, int, int]] = None) -> Image.Image:
     """
     Direct Windows GDI BitBlt screen grab.
     Uses SRCCOPY (0x00CC0020) without CAPTUREBLT to guarantee success in background/subprocess contexts.
     """
     from ctypes import wintypes
-    from PIL import Image
 
     _ensure_input_desktop()
     user32 = ctypes.windll.user32
@@ -264,7 +265,7 @@ def _win32_gdi_grab(region: Optional[Tuple[int, int, int, int]] = None):
 
         buf = ctypes.create_string_buffer(w * h * 4)
         gdi32.GetDIBits(memdc, bmp, 0, h, buf, ctypes.byref(bmi), 0)
-        img = Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB")
+        img = Image.frombuffer("RGBA", (w, h), bytes(buf), "raw", "BGRA", 0, 1).convert("RGB")
         return img
     finally:
         if memdc and old_bmp:
@@ -289,7 +290,7 @@ def _win32_gdi_grab(region: Optional[Tuple[int, int, int, int]] = None):
                 pass
 
 
-def _grab_screen(region: Optional[Tuple[int, int, int, int]] = None):
+def _grab_screen(region: Optional[Tuple[int, int, int, int]] = None) -> Image.Image:
     """Multi-tiered screen grabber that works across all execution contexts."""
     _ensure_input_desktop()
 
@@ -316,8 +317,10 @@ def _grab_screen(region: Optional[Tuple[int, int, int, int]] = None):
 
     # Priority 3: PyAutoGUI screenshot
     try:
-        pyautogui, _, Image, _, _, _ = _get_deps()
-        return pyautogui.screenshot(region=region)
+        pyautogui, _, _, _, _, _ = _get_deps()
+        shot = pyautogui.screenshot(region=region)
+        if isinstance(shot, Image.Image):
+            return shot
     except Exception:
         pass
 
@@ -418,7 +421,16 @@ def read_text(region: Optional[Tuple[int, int, int, int]] = None, detailed: bool
             }
 
         if not detailed:
-            text = pytesseract.image_to_string(screenshot).strip()
+            raw_text = pytesseract.image_to_string(screenshot)
+            if isinstance(raw_text, dict):
+                text = str(raw_text.get("text", "")).strip()
+            elif isinstance(raw_text, (bytes, bytearray)):
+                text = raw_text.decode("utf-8", errors="replace").strip()
+            elif isinstance(raw_text, str):
+                text = raw_text.strip()
+            else:
+                text = str(raw_text or "").strip()
+
             return {
                 "success": True,
                 "text": text if text else "(No visible text detected on screen)",
@@ -941,7 +953,15 @@ def zoom(
         tess = _find_tesseract()
         if tess:
             pytesseract.pytesseract.tesseract_cmd = tess
-        text = pytesseract.image_to_string(cropped).strip()
+        raw_text = pytesseract.image_to_string(cropped)
+        if isinstance(raw_text, dict):
+            text = str(raw_text.get("text", "")).strip()
+        elif isinstance(raw_text, (bytes, bytearray)):
+            text = raw_text.decode("utf-8", errors="replace").strip()
+        elif isinstance(raw_text, str):
+            text = raw_text.strip()
+        else:
+            text = str(raw_text or "").strip()
     except Exception:
         pass
 

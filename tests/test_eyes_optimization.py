@@ -180,8 +180,9 @@ def test_stale_observation_id_rejection():
     set_current_observation(obs1)
 
     # Resolve from Obs 1
-    assert resolve_element(1) is not None
-    assert resolve_element(1, observation_id="obs_1001").name == "Save"
+    res_obs1 = resolve_element(1, observation_id="obs_1001")
+    assert res_obs1 is not None
+    assert res_obs1.name == "Save"
 
     # Create Obs 2 with Element 1 = "Cancel" (screen state changed)
     el2 = UIElement(id=1, role="Button", name="Cancel", box=[10, 10, 50, 30])
@@ -189,9 +190,13 @@ def test_stale_observation_id_rejection():
     set_current_observation(obs2)
 
     # If caller asks for current element 1 -> gets "Cancel"
-    assert resolve_element(1).name == "Cancel"
+    res_curr = resolve_element(1)
+    assert res_curr is not None
+    assert res_curr.name == "Cancel"
     # If caller grounds against old obs_1001 -> gets "Save" from history
-    assert resolve_element(1, observation_id="obs_1001").name == "Save"
+    res_old = resolve_element(1, observation_id="obs_1001")
+    assert res_old is not None
+    assert res_old.name == "Save"
     # If caller grounds against a non-existent or expired observation ID -> rejected as None
     assert resolve_element(1, observation_id="obs_expired_9999") is None
 
@@ -387,10 +392,12 @@ def test_string_element_id_resolution():
     obs = Observation(observation_id="obs_str_id", active_window="Test", elements=[el])
     set_current_observation(obs)
 
-    assert obs.get_element("1") is not None
-    assert obs.get_element("1").name == "Submit"
-    assert resolve_element("1") is not None
-    assert resolve_element("1").name == "Submit"
+    el_obs = obs.get_element("1")
+    assert el_obs is not None
+    assert el_obs.name == "Submit"
+    el_res = resolve_element("1")
+    assert el_res is not None
+    assert el_res.name == "Submit"
 
 
 def test_step_timer_and_burst_times():

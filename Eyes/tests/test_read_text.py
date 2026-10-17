@@ -49,3 +49,54 @@ def test_read_text_returns_capture_error_without_running_ocr():
 
     assert result["success"] is False
     assert "capture denied" in result["error"]
+
+
+def test_read_text_handles_dict_return_from_image_to_string():
+    fake_image = MagicMock()
+    fake_image.width = 800
+    fake_image.height = 600
+
+    fake_pytesseract = MagicMock()
+    fake_pytesseract.image_to_string.return_value = {"text": "hello from dict"}
+    deps = (
+        MagicMock(),
+        fake_pytesseract,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+    )
+
+    with patch.object(eyes, "_get_deps", return_value=deps), \
+         patch.object(eyes, "_find_tesseract", return_value="tesseract"), \
+         patch.object(eyes, "_grab_screen", return_value=fake_image):
+        result = eyes.read_text()
+
+    assert result["success"] is True
+    assert result["text"] == "hello from dict"
+
+
+def test_read_text_handles_bytes_return_from_image_to_string():
+    fake_image = MagicMock()
+    fake_image.width = 800
+    fake_image.height = 600
+
+    fake_pytesseract = MagicMock()
+    fake_pytesseract.image_to_string.return_value = b"hello from bytes"
+    deps = (
+        MagicMock(),
+        fake_pytesseract,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+    )
+
+    with patch.object(eyes, "_get_deps", return_value=deps), \
+         patch.object(eyes, "_find_tesseract", return_value="tesseract"), \
+         patch.object(eyes, "_grab_screen", return_value=fake_image):
+        result = eyes.read_text()
+
+    assert result["success"] is True
+    assert result["text"] == "hello from bytes"
+
