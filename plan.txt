@@ -1,0 +1,188 @@
+# Task: Optimize the Eyes Perception Engine in `cheron2000/Agent`
+
+Act as a senior Python performance engineer specializing in Windows desktop automation, computer vision, OCR, and multimodal AI agents.
+
+Your task is to optimize the existing `Eyes/` folder for lower latency, reduced CPU and memory usage, and more reliable visual grounding.
+
+**Repository:** `cheron2000/Agent`  
+**Primary target:** `Eyes/`  
+**Constraints:** Use free and open-source tools wherever practical. Preserve existing public APIs and compatibility with `ai_controller.py`, `AgentHands`, `agent_server.py`, and existing MCP interfaces.
+
+## 1. Audit before changing code
+
+Inspect the entire `Eyes/` directory, its tests, configuration, and every caller of its public functions.
+
+Pay particular attention to:
+
+- `Eyes/eyes.py`
+- `Eyes/ocr.py`
+- `Eyes/uia.py`
+- `Eyes/cv_detect.py`
+- `Eyes/schema.py`
+- `Eyes/observe.py`
+- `Eyes/diffing.py`
+- `Eyes/coords.py`
+
+Search for duplicate screenshots, repeated OCR calls, repeated conversions between PIL and OpenCV formats, unnecessary image resizing, expensive loops, excessive serialization, and redundant UI Automation traversal.
+
+Record the baseline latency of each stage before optimizing. Do not invent performance measurements.
+
+## 2. Implement safe performance improvements
+
+### A. Screenshot capture
+
+- Capture a screenshot once per observation and reuse it throughout that observation.
+- Avoid taking additional screenshots when the current screenshot can satisfy the request.
+- Support region-based screenshots when a task only needs a known window or screen area.
+- Reuse image representations within one observation where safe.
+- Release Windows GDI resources in `finally` blocks, including on failures.
+- Preserve high-DPI coordinate correctness and multi-monitor behavior.
+
+### B. OCR optimization
+
+Use the existing Tesseract and OpenCV integration first.
+
+- Avoid running OCR more than once on the same unchanged image and configuration.
+- Introduce a bounded, per-process cache keyed by image identity or content hash, OCR parameters, and relevant region information.
+- Never reuse cached OCR results after the underlying screen content changes.
+- Make OCR scale and page segmentation mode configurable.
+- Benchmark alternative resize methods and scales instead of assuming that a faster method has equal accuracy.
+- Skip OCR when the caller explicitly requests only a screenshot or UI Automation elements.
+- Preserve word bounding boxes, phrase grouping, confidence scores, and coordinate offsets.
+- Keep fallback behavior when Tesseract is missing or fails.
+
+### C. Windows UI Automation
+
+- Retain the existing time and element-count limits.
+- Avoid repeatedly traversing the same UI tree within a single observation.
+- Filter invisible, irrelevant, and empty elements early.
+- Add stage-level timing so slow UIA providers can be identified.
+- Ensure fallback to the existing alternative UIA provider remains functional.
+- Do not use unbounded background threads or leave COM/UIA resources hanging.
+
+### D. Computer-vision detection
+
+- Inspect `cv_detect.py` for duplicate image conversions and unnecessary full-screen processing.
+- Run expensive detection only when required by the observation mode or when UIA/OCR cannot provide adequate grounding.
+- Reuse intermediate image representations when possible.
+- Add configurable limits for detections and processing time.
+- Preserve accurate bounding boxes and confidence values.
+
+### E. Observation construction
+
+- Assign stable IDs within each observation and include its `observation_id` in action-grounding data.
+- Ensure element IDs from an old observation cannot accidentally refer to elements in a newer observation.
+- Deduplicate overlapping UIA, OCR, and CV elements using a documented policy.
+- Preserve the original source and confidence of each element.
+- Avoid returning duplicate screenshot paths, redundant image payloads, or unnecessary metadata to the LLM.
+- Keep the full observation available internally while allowing a compact representation for LLM requests.
+
+### F. Adaptive observation modes
+
+Implement explicit, backward-compatible observation modes where practical:
+
+1. **Fast mode:** screenshot plus lightweight UIA or cached information; avoid full OCR/CV unless needed.
+2. **Balanced mode:** screenshot, UIA, and OCR with sensible limits.
+3. **Deep mode:** fuller OCR and CV processing when the task is visually ambiguous.
+
+Do not silently weaken perception accuracy. Make the selected mode visible in logs and configuration.
+
+### G. Cache and concurrency safety
+
+- Use bounded caches with explicit invalidation.
+- Keep cache entries isolated by relevant screen region and OCR settings.
+- Avoid global mutable task state being shared unsafely across concurrent tasks.
+- Ensure simultaneous observations cannot overwrite each other's screenshot/session state.
+- Do not hold locks while running expensive OCR or UIA operations unless strictly necessary.
+
+## 3. Free tools to consider
+
+Prefer existing dependencies first. Evaluate these only if they provide measurable value:
+
+- Tesseract OCR
+- OpenCV
+- Pillow
+- pywinauto and the existing UI Automation fallback
+- `pytest` for regression tests
+- Python's built-in `logging`, `time.perf_counter`, and `tracemalloc` for profiling
+
+Do not add paid APIs, require a cloud service, or download a large AI model by default. Optional local models must be opt-in and must not become a mandatory dependency.
+
+## 4. Add tests before declaring success
+
+Add regression tests for:
+
+- Screenshot capture reuse.
+- OCR cache hits and invalidation.
+- OCR coordinate offsets and bounding boxes.
+- UIA timeout and fallback behavior.
+- Duplicate element handling.
+- Stale observation IDs.
+- Concurrent observation/session isolation.
+- Missing optional dependencies.
+- Existing public API compatibility.
+
+Mock Windows-specific operations where necessary so unit tests can run in CI. Run real desktop integration tests only on a suitable Windows environment.
+
+## 5. Measure performance
+
+Create a repeatable benchmark script, for example `scripts/benchmark_eyes.py`.
+
+Measure:
+
+- Screenshot capture time.
+- UIA extraction time.
+- OCR preprocessing time.
+- Tesseract execution time.
+- CV detection time.
+- Observation assembly time.
+- Total observation latency.
+- Peak Python memory where measurable.
+- Cache hit rate.
+
+Report median and p95 latency over repeated runs. Compare the original baseline with the optimized version using equivalent screenshots and workloads.
+
+Do not claim a speedup unless the benchmark demonstrates it. Track accuracy regressions alongside performance.
+
+## 6. Deliverables
+
+1. Optimized implementation with minimal, reviewable changes.
+2. Benchmark script and instructions.
+3. New regression tests.
+4. Updated dependency/configuration documentation.
+5. A summary of files changed and why.
+6. Before-and-after measurements, including any accuracy trade-offs.
+7. A list of known limitations and future optimizations.
+
+Run the relevant tests and existing CI checks. Fix regressions before declaring the task complete.
+
+**Important:** Do not rewrite the entire `Eyes/` folder, remove working fallbacks, or change public function signatures without a demonstrated need. Make incremental changes, inspect the diff, and keep the implementation reversible. Do not push directly to `main`; use a dedicated branch and provide a reviewable diff or pull request.
+
+
+Recommended optimization order
+
+1. Measure the pipeline
+Add timings for capture, UIA, OCR, CV, and serialization. Find the actual bottleneck before tuning.
+
+
+
+
+2. Eliminate duplicate work
+Reuse the screenshot and intermediate image data; avoid repeating OCR on identical inputs.
+
+
+
+
+3. Add adaptive perception
+Use lightweight observations for simple actions and deeper perception only when the task requires it.
+
+
+
+
+4. Validate reliability
+Test cache invalidation, concurrent sessions, coordinate accuracy, and stale element IDs before merging.
+
+
+
+My recommendation: start with profiling and duplicate-work removal. Adding another model or running OCR and computer vision in parallel will not automatically make the agent faster; it can increase CPU usage or contention. First establish where the time is being spent.
+This is a copyable implementation brief, not a patch already applied to your repository.
