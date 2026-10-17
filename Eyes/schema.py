@@ -51,6 +51,8 @@ class Observation:
     annotated_image_path: Optional[str] = None
     screen_size: Tuple[int, int] = (1920, 1080)
     created_at: float = field(default_factory=time.time)
+    mode: str = "balanced"
+    timings: Dict[str, float] = field(default_factory=dict)
 
     def get_element(self, element_id: int) -> Optional[UIElement]:
         for el in self.elements:
@@ -67,10 +69,34 @@ class Observation:
                 matches.append(el)
         return matches
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_compact_dict(self) -> Dict[str, Any]:
+        """Compact representation optimized for LLM token efficiency."""
         return {
             "observation_id": self.observation_id,
             "active_window": self.active_window,
+            "mode": self.mode,
+            "element_count": len(self.elements),
+            "elements": [
+                {
+                    "id": el.id,
+                    "role": el.role,
+                    "name": el.name,
+                    "box": list(el.box),
+                    "center": list(el.center),
+                }
+                for el in self.elements
+            ],
+            "screen_size": list(self.screen_size),
+            "timings": dict(self.timings),
+        }
+
+    def to_dict(self, compact: bool = False) -> Dict[str, Any]:
+        if compact:
+            return self.to_compact_dict()
+        return {
+            "observation_id": self.observation_id,
+            "active_window": self.active_window,
+            "mode": self.mode,
             "element_count": len(self.elements),
             "elements": [el.to_dict() for el in self.elements],
             "image": self.annotated_image_path or self.image_path,
@@ -79,19 +105,27 @@ class Observation:
             "annotated_image_path": self.annotated_image_path,
             "screen_size": list(self.screen_size),
             "created_at": self.created_at,
+            "timings": dict(self.timings),
         }
 
 
-# ── Observation Store / Cache ────────────────────────────────────────────────
+# ── Observation Store / Cache (Bounded & Thread-Safe) ────────────────────────
+_MAX_OBSERVATIONS_HISTORY = 10
 _CURRENT_OBSERVATION: Optional[Observation] = None
+_OBSERVATIONS_HISTORY: Dict[str, Observation] = {}
 _OBS_LOCK = threading.Lock()
 
 
 def set_current_observation(obs: Observation) -> None:
-    """Store the most recent observation in memory."""
+    """Store the most recent observation in memory and update bounded history."""
     global _CURRENT_OBSERVATION
     with _OBS_LOCK:
         _CURRENT_OBSERVATION = obs
+        _OBSERVATIONS_HISTORY[obs.observation_id] = obs
+        # Prune oldest if history exceeds bound
+        while len(_OBSERVATIONS_HISTORY) > _MAX_OBSERVATIONS_HISTORY:
+            oldest_key = next(iter(_OBSERVATIONS_HISTORY))
+            del _OBSERVATIONS_HISTORY[oldest_key]
 
 
 def get_current_observation() -> Optional[Observation]:
@@ -100,11 +134,32 @@ def get_current_observation() -> Optional[Observation]:
         return _CURRENT_OBSERVATION
 
 
-def resolve_element(element_id: int, observation_id: Optional[str] = None) -> Optional[UIElement]:
-    """Resolve an element ID from the current observation."""
+def get_observation_by_id(observation_id: str) -> Optional[Observation]:
+    """Retrieve a specific observation by ID from the bounded history."""
     with _OBS_LOCK:
-        if not _CURRENT_OBSERVATION:
+        return _OBSERVATIONS_HISTORY.get(observation_id)
+
+
+def clear_observation_history() -> None:
+    """Clear all observation cache and history."""
+    global _CURRENT_OBSERVATION
+    with _OBS_LOCK:
+        _CURRENT_OBSERVATION = None
+        _OBSERVATIONS_HISTORY.clear()
+
+
+def resolve_element(element_id: int, observation_id: Optional[str] = None) -> Optional[UIElement]:
+    """Resolve an element ID safely from a target or current observation."""
+    with _OBS_LOCK:
+        target_obs = None
+        if observation_id:
+            target_obs = _OBSERVATIONS_HISTORY.get(observation_id)
+            if not target_obs:
+                return None
+        else:
+            target_obs = _CURRENT_OBSERVATION
+
+        if not target_obs:
             return None
-        if observation_id and _CURRENT_OBSERVATION.observation_id != observation_id:
-            return None
-        return _CURRENT_OBSERVATION.get_element(element_id)
+        return target_obs.get_element(element_id)
+

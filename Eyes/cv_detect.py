@@ -1,7 +1,7 @@
 """Computer Vision fallback: contour rectangle detection and template matching."""
 
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 import cv2
 import numpy as np
 from PIL import Image
@@ -16,16 +16,32 @@ logger = logging.getLogger("eyes.cv_detect")
 
 
 def detect_visual_controls(
-    image: Image.Image,
+    image: Union[Image.Image, np.ndarray],
     min_size: Tuple[int, int] = (16, 16),
     max_size: Tuple[int, int] = (800, 500),
     offset: Tuple[int, int] = (0, 0),
+    max_elements: int = 100,
 ) -> List[UIElement]:
     """Detect visual control rectangles (buttons, inputs, icons) using edge contours."""
-    bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    if isinstance(image, np.ndarray):
+        if len(image.shape) == 2:
+            gray = image
+        elif image.shape[2] == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        elif image.shape[2] == 4:
+            gray = cv2.cvtColor(image, cv2.COLOR_RGBA2GRAY)
+        else:
+            gray = image
+    else:
+        arr = np.array(image)
+        if len(arr.shape) == 2:
+            gray = arr
+        elif arr.shape[2] == 3:
+            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = cv2.cvtColor(arr, cv2.COLOR_RGBA2GRAY)
 
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blurred, 50, 150)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
@@ -38,6 +54,8 @@ def detect_visual_controls(
     max_w, max_h = max_size
 
     for cnt in contours:
+        if len(elements) >= max_elements:
+            break
         x, y, w, h = cv2.boundingRect(cnt)
         if w < min_w or h < min_h or w > max_w or h > max_h:
             continue

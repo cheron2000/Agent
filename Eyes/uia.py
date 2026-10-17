@@ -37,6 +37,7 @@ def extract_uia_elements(
     """
     target_hwnd = hwnd or get_foreground_hwnd()
     elements: List[UIElement] = []
+    t_start = time.monotonic()
 
     # 1. Primary path: pywinauto UIAElementInfo
     try:
@@ -56,7 +57,7 @@ def extract_uia_elements(
                 r = info.rectangle
                 w = r.right - r.left
                 h = r.bottom - r.top
-                if w < 4 or h < 4:
+                if w < 4 or h < 4 or r.right <= 0 or r.bottom <= 0:
                     continue
 
                 name = (getattr(info, "name", "") or "").strip()
@@ -81,6 +82,8 @@ def extract_uia_elements(
             except Exception:
                 continue
 
+        duration_ms = (time.monotonic() - t0) * 1000.0
+        logger.debug("pywinauto UIA extracted %d elements in %.1f ms", len(elements), duration_ms)
         if elements:
             return elements
     except Exception as e:

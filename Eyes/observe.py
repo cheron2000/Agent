@@ -114,28 +114,56 @@ def build_observation(
     save_annotated: bool = True,
     screenshots_dir: Optional[str] = None,
     max_elements: int = 100,
+    mode: str = "balanced",
 ) -> Observation:
-    """Capture and synthesize UIA, OCR, and visual cues into an Observation."""
+    """Capture and synthesize UIA, OCR, and visual cues into an Observation.
+    
+    Modes:
+    - 'fast': Screenshot + UIA only (bypasses OCR and CV for minimal latency).
+    - 'balanced': Screenshot + UIA + OCR (CV fallback only if element count < 10).
+    - 'deep': Comprehensive perception running UIA, full OCR, and full CV edge detection.
+    """
+    import time
+    t_start = time.perf_counter()
+    timings = {}
     screen_w, screen_h = get_screen_size()
     obs_id = f"obs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
-    # Extract elements from all available sources
     hwnd = get_foreground_hwnd()
+    
+    # 1. UIA Extraction
+    t0 = time.perf_counter()
     uia_elements = extract_uia_elements(hwnd=hwnd, max_elements=max_elements)
-    ocr_elements = extract_ocr_elements(screen_image)
-    cv_elements = detect_visual_controls(screen_image) if len(uia_elements) < 10 else []
+    timings["uia_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
 
-    # Merge, deduplicate, and sort
+    # 2. OCR Extraction (Skipped in 'fast' mode)
+    ocr_elements: List[UIElement] = []
+    t0 = time.perf_counter()
+    if mode in {"balanced", "deep"}:
+        ocr_elements = extract_ocr_elements(screen_image, use_cache=True)
+    timings["ocr_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
+
+    # 3. CV Control Detection (Only in 'deep' mode, or 'balanced' when UI elements are sparse)
+    cv_elements: List[UIElement] = []
+    t0 = time.perf_counter()
+    if mode == "deep" or (mode == "balanced" and (len(uia_elements) + len(ocr_elements)) < 10):
+        cv_elements = detect_visual_controls(screen_image, max_elements=50)
+    timings["cv_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
+
+    # 4. Merge, deduplicate, and sort
+    t0 = time.perf_counter()
     merged = deduplicate_and_merge_elements(uia_elements, ocr_elements, cv_elements)
     sorted_elements = sort_elements_reading_order(merged)[:max_elements]
 
     # Assign sequential numeric IDs starting at 1
     for idx, el in enumerate(sorted_elements, start=1):
         el.id = idx
+    timings["merge_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
 
     raw_path = None
     annotated_path = None
 
+    t0 = time.perf_counter()
     if screenshots_dir and os.path.exists(screenshots_dir):
         raw_path = os.path.join(screenshots_dir, f"{obs_id}.png")
         screen_image.save(raw_path)
@@ -144,6 +172,10 @@ def build_observation(
             annotated_img = annotate_elements(screen_image, sorted_elements)
             annotated_path = os.path.join(screenshots_dir, f"{obs_id}_marked.png")
             annotated_img.save(annotated_path)
+    timings["save_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
+
+    timings["total_ms"] = round((time.perf_counter() - t_start) * 1000.0, 2)
+    logger.debug("Observation %s [%s] completed in %.1f ms: %s", obs_id, mode, timings["total_ms"], timings)
 
     obs = Observation(
         observation_id=obs_id,
@@ -152,6 +184,8 @@ def build_observation(
         image_path=raw_path,
         annotated_image_path=annotated_path,
         screen_size=(screen_w, screen_h),
+        mode=mode,
+        timings=timings,
     )
 
     set_current_observation(obs)
