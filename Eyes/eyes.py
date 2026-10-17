@@ -862,7 +862,9 @@ def observe(
     """
     try:
         active_region = _ACTIVE_CANVAS_REGION
+        t_cap = time.perf_counter()
         screenshot = _grab_screen(region=active_region)
+        capture_burst_ms = round((time.perf_counter() - t_cap) * 1000.0, 2)
         offset = (active_region[0], active_region[1]) if active_region else (0, 0)
         active_win = ""
         try:
@@ -891,6 +893,12 @@ def observe(
                 _ACTIVE_TASK_SESSION.add_screenshot(obs.annotated_image_path)
 
         res = obs.to_dict(compact=compact)
+        if "timings" in res and isinstance(res["timings"], dict):
+            res["timings"]["capture_burst_ms"] = capture_burst_ms
+            res["timings"]["capture_ms"] = capture_burst_ms
+            total_b = round(res["timings"].get("total_burst_ms", 0.0) + capture_burst_ms, 2)
+            res["timings"]["total_burst_ms"] = total_b
+            res["timings"]["total_ms"] = total_b
         res["success"] = True
         return res
     except Exception as e:

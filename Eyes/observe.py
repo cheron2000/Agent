@@ -3,8 +3,10 @@
 import datetime
 import logging
 import os
+import time
 import uuid
-from typing import List, Optional, Tuple
+from contextlib import contextmanager
+from typing import Dict, List, Optional, Tuple
 from PIL import Image
 
 try:
@@ -24,6 +26,26 @@ except (ImportError, ValueError):
 
 
 logger = logging.getLogger("eyes.observe")
+
+
+class StepTimer:
+    """High-precision execution timer to measure CPU/burst time for discrete pipeline steps."""
+
+    def __init__(self):
+        self._start = time.perf_counter()
+        self.burst_times: Dict[str, float] = {}
+
+    @contextmanager
+    def measure(self, step_name: str):
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.burst_times[step_name] = round((time.perf_counter() - t0) * 1000.0, 2)
+
+    @property
+    def total_burst_ms(self) -> float:
+        return round((time.perf_counter() - self._start) * 1000.0, 2)
 
 
 def deduplicate_and_merge_elements(
@@ -127,68 +149,110 @@ def build_observation(
     - 'balanced': Screenshot + UIA + OCR (CV fallback only if element count < 10).
     - 'deep': Comprehensive perception running UIA, full OCR, and full CV edge detection.
     """
-    import time
-    t_start = time.perf_counter()
-    timings = {}
+    timer = StepTimer()
+    timings: Dict[str, float] = {}
     screen_w, screen_h = get_screen_size()
     obs_id = f"obs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
-    hwnd = get_foreground_hwnd()
+    with timer.measure("hwnd"):
+        hwnd = get_foreground_hwnd()
     
-    # 1. UIA Extraction
-    t0 = time.perf_counter()
-    uia_elements = extract_uia_elements(hwnd=hwnd, max_elements=max_elements)
-    timings["uia_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
+    # 1. UIA Extraction Step
+    with timer.measure("uia"):
+        uia_elements = extract_uia_elements(hwnd=hwnd, max_elements=max_elements)
 
-    # 2. OCR Extraction (Skipped in 'fast' mode)
+    # 2. OCR Extraction Step (Skipped in 'fast' mode)
     ocr_elements: List[UIElement] = []
-    t0 = time.perf_counter()
-    if mode in {"balanced", "deep"}:
-        ocr_elements = extract_ocr_elements(screen_image, use_cache=True, offset=offset)
-    timings["ocr_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
+    with timer.measure("ocr"):
+        if mode in {"balanced", "deep"}:
+            ocr_elements = extract_ocr_elements(screen_image, use_cache=True, offset=offset)
 
-    # 3. CV Control Detection (Only in 'deep' mode, or 'balanced' when UI elements are sparse)
+    # 3. CV Control Detection Step (Only in 'deep' mode, or 'balanced' when UI elements are sparse)
     cv_elements: List[UIElement] = []
-    t0 = time.perf_counter()
-    if mode == "deep" or (mode == "balanced" and (len(uia_elements) + len(ocr_elements)) < 10):
-        cv_elements = detect_visual_controls(screen_image, max_elements=50)
-        if offset != (0, 0):
-            for cv_el in cv_elements:
-                cv_el.box = [
-                    cv_el.box[0] + offset[0],
-                    cv_el.box[1] + offset[1],
-                    cv_el.box[2] + offset[0],
-                    cv_el.box[3] + offset[1],
-                ]
-                cv_el.center = (cv_el.center[0] + offset[0], cv_el.center[1] + offset[1])
-    timings["cv_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
+    with timer.measure("cv"):
+        if mode == "deep" or (mode == "balanced" and (len(uia_elements) + len(ocr_elements)) < 10):
+            cv_elements = detect_visual_controls(screen_image, max_elements=50)
+            if offset != (0, 0):
+                for cv_el in cv_elements:
+                    cv_el.box = [
+                        cv_el.box[0] + offset[0],
+                        cv_el.box[1] + offset[1],
+                        cv_el.box[2] + offset[0],
+                        cv_el.box[3] + offset[1],
+                    ]
+                    cv_el.center = (cv_el.center[0] + offset[0], cv_el.center[1] + offset[1])
 
-    # 4. Merge, deduplicate, and sort
-    t0 = time.perf_counter()
-    merged = deduplicate_and_merge_elements(uia_elements, ocr_elements, cv_elements, mode=mode)
-    sorted_elements = sort_elements_reading_order(merged)[:max_elements]
+    # 4. Deduplicate and Merge Step
+    with timer.measure("dedup"):
+        merged = deduplicate_and_merge_elements(uia_elements, ocr_elements, cv_elements, mode=mode)
 
-    # Assign sequential numeric IDs starting at 1
-    for idx, el in enumerate(sorted_elements, start=1):
-        el.id = idx
-    timings["merge_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
+    # 5. Spatial Reading-Order Sort Step
+    with timer.measure("sort"):
+        sorted_elements = sort_elements_reading_order(merged)[:max_elements]
+
+    # 6. Sequential Grounding ID Assignment Step
+    with timer.measure("assign_ids"):
+        for idx, el in enumerate(sorted_elements, start=1):
+            el.id = idx
 
     raw_path = None
     annotated_path = None
 
-    t0 = time.perf_counter()
+    # 7. Screenshot Saving and Set-of-Marks Annotation Step
     if screenshots_dir and os.path.exists(screenshots_dir):
-        raw_path = os.path.join(screenshots_dir, f"{obs_id}.png")
-        screen_image.save(raw_path)
+        with timer.measure("save_raw"):
+            raw_path = os.path.join(screenshots_dir, f"{obs_id}.png")
+            screen_image.save(raw_path)
 
         if save_annotated:
-            annotated_img = annotate_elements(screen_image, sorted_elements)
-            annotated_path = os.path.join(screenshots_dir, f"{obs_id}_marked.png")
-            annotated_img.save(annotated_path)
-    timings["save_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
+            with timer.measure("annotate"):
+                annotated_img = annotate_elements(screen_image, sorted_elements)
+            with timer.measure("save_annotated"):
+                annotated_path = os.path.join(screenshots_dir, f"{obs_id}_marked.png")
+                annotated_img.save(annotated_path)
 
-    timings["total_ms"] = round((time.perf_counter() - t_start) * 1000.0, 2)
-    logger.debug("Observation %s [%s] completed in %.1f ms: %s", obs_id, mode, timings["total_ms"], timings)
+    # Calculate burst times for each atomic step
+    timings["uia_burst_ms"] = timer.burst_times.get("uia", 0.0)
+    timings["uia_ms"] = timings["uia_burst_ms"]
+
+    timings["ocr_burst_ms"] = timer.burst_times.get("ocr", 0.0)
+    timings["ocr_ms"] = timings["ocr_burst_ms"]
+
+    timings["cv_burst_ms"] = timer.burst_times.get("cv", 0.0)
+    timings["cv_ms"] = timings["cv_burst_ms"]
+
+    timings["dedup_burst_ms"] = timer.burst_times.get("dedup", 0.0)
+    timings["sort_burst_ms"] = timer.burst_times.get("sort", 0.0)
+    timings["assign_id_burst_ms"] = timer.burst_times.get("assign_ids", 0.0)
+    merge_total = round(timings["dedup_burst_ms"] + timings["sort_burst_ms"] + timings["assign_id_burst_ms"], 2)
+    timings["merge_burst_ms"] = merge_total
+    timings["merge_ms"] = merge_total
+
+    save_raw = timer.burst_times.get("save_raw", 0.0)
+    annotate = timer.burst_times.get("annotate", 0.0)
+    save_ann = timer.burst_times.get("save_annotated", 0.0)
+    save_total = round(save_raw + annotate + save_ann, 2)
+    timings["save_raw_burst_ms"] = save_raw
+    timings["annotate_burst_ms"] = annotate
+    timings["save_annotated_burst_ms"] = save_ann
+    timings["save_burst_ms"] = save_total
+    timings["save_ms"] = save_total
+
+    timings["total_burst_ms"] = timer.total_burst_ms
+    timings["total_ms"] = timer.total_burst_ms
+
+    logger.debug(
+        "Observation %s [%s] completed in %.1f ms burst time (UIA: %.1fms, OCR: %.1fms, CV: %.1fms, Dedup: %.1fms, Sort: %.1fms, Save: %.1fms)",
+        obs_id,
+        mode,
+        timings["total_burst_ms"],
+        timings["uia_burst_ms"],
+        timings["ocr_burst_ms"],
+        timings["cv_burst_ms"],
+        timings["dedup_burst_ms"],
+        timings["sort_burst_ms"],
+        timings["save_burst_ms"],
+    )
 
     obs = Observation(
         observation_id=obs_id,

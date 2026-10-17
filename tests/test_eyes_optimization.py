@@ -393,5 +393,37 @@ def test_string_element_id_resolution():
     assert resolve_element("1").name == "Submit"
 
 
+def test_step_timer_and_burst_times():
+    """Verify StepTimer and individual step burst times are tracked in build_observation."""
+    from Eyes.observe import StepTimer
+
+    # Test StepTimer independently
+    timer = StepTimer()
+    with timer.measure("dummy_step"):
+        time.sleep(0.01)
+
+    assert "dummy_step" in timer.burst_times
+    assert timer.burst_times["dummy_step"] >= 5.0
+    assert timer.total_burst_ms >= 5.0
+
+    # Test integration in build_observation
+    img = Image.new("RGB", (320, 240), (200, 200, 200))
+    obs = build_observation(img, mode="fast", save_annotated=False)
+
+    required_burst_keys = [
+        "uia_burst_ms",
+        "ocr_burst_ms",
+        "cv_burst_ms",
+        "dedup_burst_ms",
+        "sort_burst_ms",
+        "assign_id_burst_ms",
+        "merge_burst_ms",
+        "total_burst_ms",
+    ]
+    for k in required_burst_keys:
+        assert k in obs.timings, f"Missing burst timing key: {k}"
+        assert isinstance(obs.timings[k], (int, float))
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__]))

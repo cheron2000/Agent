@@ -236,7 +236,7 @@ def extract_ocr_elements(
         current_confs: List[float] = []
 
         for w in words:
-            if not current_phrase:
+            if not current_phrase or current_box is None:
                 current_phrase = [w["text"]]
                 current_box = list(w["box"])
                 current_confs = [w["conf"]]
