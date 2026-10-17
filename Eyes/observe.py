@@ -14,13 +14,13 @@ try:
     from .ocr import extract_ocr_elements
     from .schema import Observation, UIElement, set_current_observation
     from .uia import extract_uia_elements, get_foreground_hwnd
-except ImportError:
-    from annotate import annotate_elements
-    from coords import box_iou, get_screen_size
-    from cv_detect import detect_visual_controls
-    from ocr import extract_ocr_elements
-    from schema import Observation, UIElement, set_current_observation
-    from uia import extract_uia_elements, get_foreground_hwnd
+except (ImportError, ValueError):
+    from Eyes.annotate import annotate_elements
+    from Eyes.coords import box_iou, get_screen_size
+    from Eyes.cv_detect import detect_visual_controls
+    from Eyes.ocr import extract_ocr_elements
+    from Eyes.schema import Observation, UIElement, set_current_observation
+    from Eyes.uia import extract_uia_elements, get_foreground_hwnd
 
 
 logger = logging.getLogger("eyes.observe")
@@ -31,6 +31,7 @@ def deduplicate_and_merge_elements(
     ocr_elements: List[UIElement],
     cv_elements: List[UIElement],
     iou_threshold: float = 0.4,
+    mode: str = "balanced",
 ) -> List[UIElement]:
     """Merge UIA, OCR, and CV elements, prioritizing UIA and deduplicating by IoU."""
     merged: List[UIElement] = []
@@ -63,7 +64,8 @@ def deduplicate_and_merge_elements(
 
         if best_match and best_iou >= iou_threshold:
             # If the matching UIA element has no name or generic name, use the OCR text
-            if not best_match.name or best_match.name.lower() in {"button", "item", "edit"}:
+            raw_name = (best_match.name or "").strip().lower()
+            if not raw_name or raw_name in {"button", "item", "edit", "pane", "group"}:
                 best_match.name = ocr_el.name
         else:
             merged.append(
@@ -78,8 +80,9 @@ def deduplicate_and_merge_elements(
                 )
             )
 
-    # 3. Add CV elements if element count is sparse and CV box has no overlap with existing elements
-    if len(merged) < 15 and cv_elements:
+    # 3. Add CV elements if mode is deep or element count is sparse
+    allow_cv = (mode == "deep") or (len(merged) < 15)
+    if allow_cv and cv_elements:
         for cv_el in cv_elements:
             overlaps = any(box_iou(cv_el.box, m.box) > 0.25 for m in merged)
             if not overlaps:
@@ -101,7 +104,7 @@ def deduplicate_and_merge_elements(
 def sort_elements_reading_order(elements: List[UIElement], y_band_size: int = 24) -> List[UIElement]:
     """Sort elements top-to-bottom in Y-bands, and left-to-right within each band."""
     def sort_key(el: UIElement):
-        y_band = int(el.box[1] / y_band_size)
+        y_band = el.box[1] // y_band_size
         x = el.box[0]
         return y_band, x
 
@@ -115,6 +118,7 @@ def build_observation(
     screenshots_dir: Optional[str] = None,
     max_elements: int = 100,
     mode: str = "balanced",
+    offset: Tuple[int, int] = (0, 0),
 ) -> Observation:
     """Capture and synthesize UIA, OCR, and visual cues into an Observation.
     
@@ -140,7 +144,7 @@ def build_observation(
     ocr_elements: List[UIElement] = []
     t0 = time.perf_counter()
     if mode in {"balanced", "deep"}:
-        ocr_elements = extract_ocr_elements(screen_image, use_cache=True)
+        ocr_elements = extract_ocr_elements(screen_image, use_cache=True, offset=offset)
     timings["ocr_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
 
     # 3. CV Control Detection (Only in 'deep' mode, or 'balanced' when UI elements are sparse)
@@ -148,11 +152,20 @@ def build_observation(
     t0 = time.perf_counter()
     if mode == "deep" or (mode == "balanced" and (len(uia_elements) + len(ocr_elements)) < 10):
         cv_elements = detect_visual_controls(screen_image, max_elements=50)
+        if offset != (0, 0):
+            for cv_el in cv_elements:
+                cv_el.box = [
+                    cv_el.box[0] + offset[0],
+                    cv_el.box[1] + offset[1],
+                    cv_el.box[2] + offset[0],
+                    cv_el.box[3] + offset[1],
+                ]
+                cv_el.center = (cv_el.center[0] + offset[0], cv_el.center[1] + offset[1])
     timings["cv_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
 
     # 4. Merge, deduplicate, and sort
     t0 = time.perf_counter()
-    merged = deduplicate_and_merge_elements(uia_elements, ocr_elements, cv_elements)
+    merged = deduplicate_and_merge_elements(uia_elements, ocr_elements, cv_elements, mode=mode)
     sorted_elements = sort_elements_reading_order(merged)[:max_elements]
 
     # Assign sequential numeric IDs starting at 1

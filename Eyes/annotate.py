@@ -6,9 +6,9 @@ from PIL import Image, ImageDraw, ImageFont
 try:
     from .coords import box_area
     from .schema import UIElement
-except ImportError:
-    from coords import box_area
-    from schema import UIElement
+except (ImportError, ValueError):
+    from Eyes.coords import box_area
+    from Eyes.schema import UIElement
 
 
 

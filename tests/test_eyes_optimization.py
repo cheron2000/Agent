@@ -286,5 +286,112 @@ def test_desktop_controller_api_compatibility():
         mock_click.assert_called_with(x=20, y=20, button="left", clicks=1)
 
 
+# ── 7. Additional Robustness & Regression Tests ──────────────────────────────
+def test_ocr_autodiscovery_and_availability():
+    """Verify that is_tesseract_available works and auto-discovers binary if present."""
+    clear_ocr_cache()
+    # Should run without error and return a boolean
+    available = is_tesseract_available()
+    assert isinstance(available, bool)
+
+
+def test_ocr_cache_thread_safety():
+    """Verify concurrent extract_ocr_elements calls under cache do not race."""
+    clear_ocr_cache()
+    img = Image.new("RGB", (100, 50), (255, 255, 255))
+    fake_data = {
+        "text": ["ThreadSafe"],
+        "conf": [90],
+        "left": [10],
+        "top": [10],
+        "width": [50],
+        "height": [20],
+        "block_num": [1],
+        "par_num": [1],
+        "line_num": [1],
+    }
+
+    with patch("Eyes.ocr.is_tesseract_available", return_value=True), \
+         patch("pytesseract.image_to_data", return_value=fake_data):
+
+        errors = []
+
+        def worker():
+            try:
+                for _ in range(25):
+                    elems = extract_ocr_elements(img, use_cache=True)
+                    assert len(elems) == 1
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == [], f"Thread-safety errors encountered: {errors}"
+        stats = get_ocr_cache_stats()
+        assert stats["size"] == 1
+        assert stats["hits"] > 0
+
+
+def test_ocr_list_offset_support():
+    """Verify offset passed as a list does not trigger TypeError: unhashable type: 'list'."""
+    clear_ocr_cache()
+    img = Image.new("RGB", (60, 30), (200, 200, 200))
+    fake_data = {
+        "text": ["Item"],
+        "conf": [85],
+        "left": [5],
+        "top": [5],
+        "width": [30],
+        "height": [15],
+        "block_num": [1],
+        "par_num": [1],
+        "line_num": [1],
+    }
+
+    with patch("Eyes.ocr.is_tesseract_available", return_value=True), \
+         patch("pytesseract.image_to_data", return_value=fake_data):
+        # Passing offset as list [50, 100]
+        elems = extract_ocr_elements(img, offset=[50, 100], use_cache=True)
+        assert len(elems) == 1
+        assert elems[0].box[0] >= 50
+
+
+def test_deep_mode_cv_retention_when_elements_exceed_15():
+    """Verify that in mode='deep', CV elements are NOT arbitrarily dropped when merged >= 15."""
+    img = Image.new("RGB", (640, 480), (128, 128, 128))
+    # 20 UIA elements
+    fake_uia = [
+        UIElement(id=0, role="Button", name=f"Btn_{i}", box=[10, i * 20, 50, i * 20 + 15])
+        for i in range(20)
+    ]
+    # CV element in a completely non-overlapping area
+    fake_cv = [UIElement(id=0, role="Control", name="", box=[400, 400, 450, 450])]
+
+    with patch("Eyes.observe.get_foreground_hwnd", return_value=12345), \
+         patch("Eyes.observe.extract_uia_elements", return_value=fake_uia), \
+         patch("Eyes.observe.extract_ocr_elements", return_value=[]), \
+         patch("Eyes.observe.detect_visual_controls", return_value=fake_cv):
+
+        obs = build_observation(img, mode="deep", save_annotated=False)
+        cv_items = [e for e in obs.elements if e.source == "cv"]
+        assert len(cv_items) == 1, "Deep mode must preserve CV elements even when element count >= 15"
+
+
+def test_string_element_id_resolution():
+    """Verify Observation.get_element and resolve_element handle string IDs like '1'."""
+    el = UIElement(id=1, role="Button", name="Submit", box=[10, 10, 50, 30])
+    obs = Observation(observation_id="obs_str_id", active_window="Test", elements=[el])
+    set_current_observation(obs)
+
+    assert obs.get_element("1") is not None
+    assert obs.get_element("1").name == "Submit"
+    assert resolve_element("1") is not None
+    assert resolve_element("1").name == "Submit"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__]))

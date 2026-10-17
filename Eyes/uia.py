@@ -7,8 +7,8 @@ import win32gui
 
 try:
     from .schema import UIElement
-except ImportError:
-    from schema import UIElement
+except (ImportError, ValueError):
+    from Eyes.schema import UIElement
 
 
 logger = logging.getLogger("eyes.uia")

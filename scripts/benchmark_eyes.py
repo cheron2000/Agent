@@ -8,7 +8,7 @@ import sys
 import time
 import tracemalloc
 from pathlib import Path
-from typing import Callable, Dict, List, Any
+from typing import Callable, Dict, List, Any, Tuple
 import numpy as np
 
 # Ensure workspace root and Eyes are on path
@@ -73,11 +73,11 @@ def run_benchmark(iterations: int = 5, verbose: bool = True) -> Dict[str, Any]:
         t, _ = time_function(preprocess_image_for_ocr, screen_img)
         ocr_prep_timings.append(t)
 
-    # 4. OCR Extraction
+    # 4. OCR Extraction (Uncached engine throughput)
     ocr_timings = []
     ocr_counts = []
     for _ in range(iterations):
-        t, elems = time_function(extract_ocr_elements, screen_img)
+        t, elems = time_function(extract_ocr_elements, screen_img, use_cache=False)
         ocr_timings.append(t)
         ocr_counts.append(len(elems))
 
@@ -165,5 +165,4 @@ def run_benchmark(iterations: int = 5, verbose: bool = True) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    from typing import Tuple
     run_benchmark(iterations=5)

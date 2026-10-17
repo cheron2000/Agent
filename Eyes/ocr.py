@@ -1,5 +1,8 @@
 import hashlib
 import logging
+import os
+import shutil
+import threading
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 import cv2
@@ -9,59 +12,94 @@ from PIL import Image
 
 try:
     from .schema import UIElement
-except ImportError:
-    from schema import UIElement
+except (ImportError, ValueError):
+    from Eyes.schema import UIElement
 
 
 logger = logging.getLogger("eyes.ocr")
 
-# ── Bounded LRU Cache for OCR Extraction ────────────────────────────────────
+TESSERACT_PATHS = [
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    r"C:\Users\Lenovo\AppData\Local\Programs\Tesseract-OCR\tesseract.exe",
+    os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"),
+]
+
+
+def _find_tesseract() -> Optional[str]:
+    """Locate the Tesseract executable on Windows or system PATH."""
+    for p in TESSERACT_PATHS:
+        if os.path.exists(p):
+            return p
+    return shutil.which("tesseract")
+
+
+# ── Bounded Thread-Safe LRU Cache for OCR Extraction ────────────────────────
 _MAX_OCR_CACHE_SIZE = 16
 _OCR_CACHE: OrderedDict = OrderedDict()
 _CACHE_STATS = {"hits": 0, "misses": 0}
 _TESSERACT_AVAILABLE: Optional[bool] = None
+_OCR_CACHE_LOCK = threading.Lock()
 
 
 def is_tesseract_available() -> bool:
     """Check and cache whether Tesseract OCR binary is reachable and operational."""
     global _TESSERACT_AVAILABLE
-    if _TESSERACT_AVAILABLE is not None:
+    with _OCR_CACHE_LOCK:
+        if _TESSERACT_AVAILABLE is not None:
+            return _TESSERACT_AVAILABLE
+
+        # Ensure pytesseract points to a valid binary if available on disk
+        cmd = getattr(pytesseract.pytesseract, "tesseract_cmd", "tesseract")
+        if not cmd or cmd == "tesseract" or not os.path.exists(cmd):
+            discovered = _find_tesseract()
+            if discovered:
+                pytesseract.pytesseract.tesseract_cmd = discovered
+
+        try:
+            ver = pytesseract.get_tesseract_version()
+            _TESSERACT_AVAILABLE = bool(ver)
+        except Exception:
+            _TESSERACT_AVAILABLE = False
         return _TESSERACT_AVAILABLE
-    try:
-        ver = pytesseract.get_tesseract_version()
-        _TESSERACT_AVAILABLE = bool(ver)
-    except Exception:
-        _TESSERACT_AVAILABLE = False
-    return _TESSERACT_AVAILABLE
 
 
 def get_ocr_cache_stats() -> Dict[str, Any]:
     """Return cache hit/miss statistics and current cache size."""
-    total = _CACHE_STATS["hits"] + _CACHE_STATS["misses"]
-    hit_rate = round(_CACHE_STATS["hits"] / total, 3) if total > 0 else 0.0
-    return {
-        "hits": _CACHE_STATS["hits"],
-        "misses": _CACHE_STATS["misses"],
-        "size": len(_OCR_CACHE),
-        "hit_rate": hit_rate,
-    }
+    with _OCR_CACHE_LOCK:
+        total = _CACHE_STATS["hits"] + _CACHE_STATS["misses"]
+        hit_rate = round(_CACHE_STATS["hits"] / total, 3) if total > 0 else 0.0
+        return {
+            "hits": _CACHE_STATS["hits"],
+            "misses": _CACHE_STATS["misses"],
+            "size": len(_OCR_CACHE),
+            "hit_rate": hit_rate,
+        }
 
 
 def clear_ocr_cache() -> None:
-    """Explicitly clear the OCR LRU cache."""
+    """Explicitly clear the OCR LRU cache and reset availability state."""
     global _TESSERACT_AVAILABLE
-    _OCR_CACHE.clear()
-    _CACHE_STATS["hits"] = 0
-    _CACHE_STATS["misses"] = 0
-    _TESSERACT_AVAILABLE = None
+    with _OCR_CACHE_LOCK:
+        _OCR_CACHE.clear()
+        _CACHE_STATS["hits"] = 0
+        _CACHE_STATS["misses"] = 0
+        _TESSERACT_AVAILABLE = None
 
 
 def _compute_image_hash(img: Union[Image.Image, np.ndarray]) -> str:
     """Generate a fast perceptual-style content hash of the image for cache keying."""
     try:
         if isinstance(img, np.ndarray):
-            # Fast strided sample of the array
-            sample = img[::16, ::16].tobytes()
+            # Rescale array to a fixed small thumbnail to prevent 1-pixel collisions on small crops
+            if img.size == 0:
+                return ""
+            if len(img.shape) == 3:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY if img.shape[2] == 3 else cv2.COLOR_BGRA2GRAY)
+            else:
+                gray = img
+            thumb = cv2.resize(gray, (64, 36), interpolation=cv2.INTER_NEAREST)
+            sample = thumb.tobytes()
         else:
             # Thumbnail sample
             thumb = img.resize((64, 36), Image.Resampling.NEAREST).convert("L")
@@ -81,21 +119,17 @@ def preprocess_image_for_ocr(
     if isinstance(img, np.ndarray):
         if len(img.shape) == 2:
             gray = img.copy()
+        elif img.shape[2] == 1:
+            gray = img[:, :, 0].copy()
         elif img.shape[2] == 3:
             gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         elif img.shape[2] == 4:
             gray = cv2.cvtColor(img, cv2.COLOR_RGBA2GRAY)
         else:
-            gray = img
+            gray = img.copy()
     else:
-        # Convert PIL Image directly to grayscale
-        arr = np.array(img)
-        if len(arr.shape) == 2:
-            gray = arr
-        elif arr.shape[2] == 3:
-            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = cv2.cvtColor(arr, cv2.COLOR_RGBA2GRAY)
+        # Convert PIL Image reliably to grayscale mode 'L'
+        gray = np.array(img.convert("L"))
 
     # Invert dark-themed backgrounds so text is consistently dark-on-light for Tesseract
     if invert_dark_theme and gray.mean() < 115:
@@ -111,7 +145,7 @@ def extract_ocr_elements(
     image: Union[Image.Image, np.ndarray],
     min_confidence: int = 40,
     scale: float = 2.0,
-    offset: Tuple[int, int] = (0, 0),
+    offset: Union[Tuple[int, int], List[int]] = (0, 0),
     psm: int = 11,
     interpolation: int = cv2.INTER_LINEAR,
     use_cache: bool = True,
@@ -120,30 +154,33 @@ def extract_ocr_elements(
     if not is_tesseract_available():
         return []
 
+    norm_offset = (int(offset[0]), int(offset[1])) if offset and len(offset) >= 2 else (0, 0)
+
     # Check LRU cache
     img_hash = _compute_image_hash(image) if use_cache else ""
-    cache_key = (img_hash, round(scale, 2), psm, min_confidence, offset)
-    if use_cache and img_hash and cache_key in _OCR_CACHE:
-        _CACHE_STATS["hits"] += 1
-        _OCR_CACHE.move_to_end(cache_key)
-        cached_elements = _OCR_CACHE[cache_key]
-        # Return shallow copies so caller mutations don't alter cached objects
-        return [
-            UIElement(
-                id=el.id,
-                role=el.role,
-                name=el.name,
-                box=list(el.box),
-                center=el.center,
-                enabled=el.enabled,
-                source=el.source,
-                conf=el.conf,
-            )
-            for el in cached_elements
-        ]
-
-    if use_cache:
-        _CACHE_STATS["misses"] += 1
+    cache_key = (img_hash, round(scale, 2), psm, min_confidence, norm_offset)
+    if use_cache and img_hash:
+        with _OCR_CACHE_LOCK:
+            if cache_key in _OCR_CACHE:
+                _CACHE_STATS["hits"] += 1
+                _OCR_CACHE.move_to_end(cache_key)
+                cached_elements = _OCR_CACHE[cache_key]
+                # Return shallow copies so caller mutations don't alter cached objects
+                return [
+                    UIElement(
+                        id=el.id,
+                        role=el.role,
+                        name=el.name,
+                        box=list(el.box),
+                        center=el.center,
+                        enabled=el.enabled,
+                        source=el.source,
+                        conf=el.conf,
+                    )
+                    for el in cached_elements
+                ]
+            else:
+                _CACHE_STATS["misses"] += 1
 
     processed, used_scale = preprocess_image_for_ocr(image, scale=scale, interpolation=interpolation)
     config = f"--psm {psm}"
@@ -158,7 +195,7 @@ def extract_ocr_elements(
         logger.warning("OCR image_to_data failed: %s", e)
         return []
 
-    off_x, off_y = offset
+    off_x, off_y = norm_offset
     raw_words = []
     n_boxes = len(data.get("text", []))
 
@@ -212,9 +249,10 @@ def extract_ocr_elements(
 
             if (curr_x1 - prev_x2) <= max(20, avg_h * 1.5):
                 current_phrase.append(w["text"])
+                current_box[0] = min(current_box[0], w["box"][0])
+                current_box[1] = min(current_box[1], w["box"][1])
                 current_box[2] = max(current_box[2], w["box"][2])
                 current_box[3] = max(current_box[3], w["box"][3])
-                current_box[1] = min(current_box[1], w["box"][1])
                 current_confs.append(w["conf"])
             else:
                 # Flush previous phrase
@@ -250,8 +288,9 @@ def extract_ocr_elements(
 
     # Store in LRU cache if caching is active
     if use_cache and img_hash:
-        _OCR_CACHE[cache_key] = elements
-        while len(_OCR_CACHE) > _MAX_OCR_CACHE_SIZE:
-            _OCR_CACHE.popitem(last=False)
+        with _OCR_CACHE_LOCK:
+            _OCR_CACHE[cache_key] = elements
+            while len(_OCR_CACHE) > _MAX_OCR_CACHE_SIZE:
+                _OCR_CACHE.popitem(last=False)
 
     return elements

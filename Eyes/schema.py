@@ -1,14 +1,14 @@
-﻿"""Data schemas for UI elements and full screen observations."""
+"""Data schemas for UI elements and full screen observations."""
 
 from dataclasses import dataclass, field
 import threading
 import time
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 try:
     from .coords import box_center
-except ImportError:
-    from coords import box_center
+except (ImportError, ValueError):
+    from Eyes.coords import box_center
 
 
 
@@ -25,7 +25,7 @@ class UIElement:
     conf: float = 1.0
 
     def __post_init__(self):
-        if not self.center or self.center == (0, 0):
+        if self.box and len(self.box) >= 4 and (not self.center or self.center == (0, 0)):
             self.center = box_center(self.box)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -54,9 +54,13 @@ class Observation:
     mode: str = "balanced"
     timings: Dict[str, float] = field(default_factory=dict)
 
-    def get_element(self, element_id: int) -> Optional[UIElement]:
+    def get_element(self, element_id: Union[int, str]) -> Optional[UIElement]:
+        try:
+            target_id = int(element_id)
+        except (ValueError, TypeError):
+            target_id = element_id
         for el in self.elements:
-            if el.id == element_id:
+            if el.id == target_id:
                 return el
         return None
 
@@ -148,7 +152,7 @@ def clear_observation_history() -> None:
         _OBSERVATIONS_HISTORY.clear()
 
 
-def resolve_element(element_id: int, observation_id: Optional[str] = None) -> Optional[UIElement]:
+def resolve_element(element_id: Union[int, str], observation_id: Optional[str] = None) -> Optional[UIElement]:
     """Resolve an element ID safely from a target or current observation."""
     with _OBS_LOCK:
         target_obs = None

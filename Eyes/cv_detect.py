@@ -8,8 +8,8 @@ from PIL import Image
 
 try:
     from .schema import UIElement
-except ImportError:
-    from schema import UIElement
+except (ImportError, ValueError):
+    from Eyes.schema import UIElement
 
 
 logger = logging.getLogger("eyes.cv_detect")

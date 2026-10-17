@@ -31,11 +31,11 @@ try:
     from .diffing import wait_until
     from .observe import build_observation
     from .schema import Observation, UIElement, resolve_element
-except ImportError:
-    from coords import box_center, get_screen_size
-    from diffing import wait_until
-    from observe import build_observation
-    from schema import Observation, UIElement, resolve_element
+except (ImportError, ValueError):
+    from Eyes.coords import box_center, get_screen_size
+    from Eyes.diffing import wait_until
+    from Eyes.observe import build_observation
+    from Eyes.schema import Observation, UIElement, resolve_element
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Enable High-DPI Awareness on Windows Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 if sys.platform == "win32":
@@ -927,11 +927,18 @@ def zoom(
 
     elements = extract_ocr_elements(cropped, scale=scale, offset=(x1, y1))
 
-    pyautogui, pytesseract, _, _, _, _ = _get_deps()
-    tess = _find_tesseract()
-    if tess:
-        pytesseract.pytesseract.tesseract_cmd = tess
-    text = pytesseract.image_to_string(cropped).strip()
+    text = ""
+    try:
+        pyautogui, pytesseract, _, _, _, _ = _get_deps()
+        tess = _find_tesseract()
+        if tess:
+            pytesseract.pytesseract.tesseract_cmd = tess
+        text = pytesseract.image_to_string(cropped).strip()
+    except Exception:
+        pass
+
+    if not text and elements:
+        text = " ".join(el.name for el in elements if el.name).strip()
 
     return {
         "success": True,
