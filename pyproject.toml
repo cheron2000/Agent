@@ -43,7 +43,7 @@ dev = [
 py-modules = ["agent_server", "api_client", "ai_controller"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "Hands/tests"]
+testpaths = ["tests", "Hands/tests", "Eyes/tests"]
 python_files = ["test_*.py"]
 pythonpath = ["."]
 asyncio_mode = "auto"

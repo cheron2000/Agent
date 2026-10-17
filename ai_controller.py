@@ -97,8 +97,12 @@ class DesktopAgentController:
     def type_text(self, text: str, profile: str = "natural", typos: bool = False) -> Dict[str, Any]:
         """Send simulated keyboard input to the active Windows application."""
         return TypingEngine(profile=profile).type_text(text=text, introduce_typos=typos)
-
     def paste_text(self, text: str, restore_clipboard: bool = False) -> None:
+        """Paste bulk text through the clipboard instead of simulating each key.
+
+        Prefer this for long emails, prompts, and reports. Use type_text() when
+        realistic per-key input is specifically needed by the target application.
+        """
         fast_paste(text, restore_clipboard=restore_clipboard)
 
     def press_key(self, key: str) -> None:
@@ -108,4 +112,5 @@ class DesktopAgentController:
 if __name__ == "__main__":
     controller = DesktopAgentController()
     logger.info("%s", controller.screen_info())
+
 

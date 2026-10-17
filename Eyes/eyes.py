@@ -361,12 +361,18 @@ def read_text(region: Optional[Tuple[int, int, int, int]] = None, detailed: bool
             }
         pytesseract.pytesseract.tesseract_cmd = tess
 
-        cap = capture(region=active_region, save=False)
-        if not cap["success"]:
-            return {"success": False, "text": "", "elements": [], "error": cap["error"]}
-
-        # Take screenshot as PIL Image
-        screenshot = _grab_screen(region=active_region)
+        # Capture once in memory and use that exact frame for OCR. The previous
+        # path captured the screen via capture() and then immediately captured it
+        # again, wasting time and potentially transcribing a different frame.
+        try:
+            screenshot = _grab_screen(region=active_region)
+        except Exception as capture_error:
+            return {
+                "success": False,
+                "text": "",
+                "elements": [],
+                "error": f"Screen capture failed: {capture_error}",
+            }
 
         if not detailed:
             text = pytesseract.image_to_string(screenshot).strip()
