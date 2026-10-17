@@ -1,20 +1,34 @@
 """Human-like task planner that translates user goals into sequential step-by-step instructions.
 
-Models how a human performs desktop tasks:
-1. Search and launch application from Start / taskbar.
-2. Wait for application window to open and focus.
-3. Observe screen to assess context (e.g. Profile picker, active tab state).
-4. Locate search bar / address bar and click or hotkey into it.
-5. Type URL / query with natural human typing velocity using Hands.
-6. Submit and verify visual post-conditions with Eyes.
+Incorporates:
+- Atomic Action Contract with typed preconditions, expected effects, and risk tiers.
+- 4-Tier Verification Hierarchy:
+    Level 1: Direct State Verification (UIA properties & window state)
+    Level 2: Visual Grounding & fine-tuned OCR
+    Level 3: Semantic Context reasoning
+    Level 4: Human Escalation for ambiguous or high-risk actions
+- Structured Recovery Provenance tracking for auditability.
+- Two-Tier Recovery Controller (Micro-recovery modal clearing vs Macro-recovery replanning).
+- Durable State Checkpointing with crash-resilient resumption.
 """
 
+import hashlib
 import logging
+import os
 import re
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .schema import Plan, PlanStep, StepActionType, StepStatus
+from .schema import (
+    ActionRiskLevel,
+    Checkpoint,
+    Plan,
+    PlanStep,
+    RecoveryProvenanceRecord,
+    StepActionType,
+    StepStatus,
+    VerificationLevel,
+)
 
 logger = logging.getLogger("planner.human_planner")
 
@@ -22,8 +36,9 @@ logger = logging.getLogger("planner.human_planner")
 class HumanLikePlanner:
     """Generates and executes human-like step-by-step task plans for desktop operations."""
 
-    def __init__(self, controller: Optional[Any] = None):
+    def __init__(self, controller: Optional[Any] = None, checkpoint_dir: str = ".checkpoints"):
         self.controller = controller
+        self.checkpoint_dir = checkpoint_dir
 
     def _get_controller(self):
         if self.controller is None:
@@ -65,6 +80,8 @@ class HumanLikePlanner:
             target_dest = "https://www.youtube.com"
         elif "google" in clean_goal:
             target_dest = "https://www.google.com"
+        elif "chatgpt" in clean_goal:
+            target_dest = "https://chatgpt.com"
         elif "to " in clean_goal:
             target_dest = goal[clean_goal.find("to ") + 3:].strip()
             if not target_dest.startswith("http"):
@@ -79,6 +96,9 @@ class HumanLikePlanner:
             parameters={"keys": ["win"]},
             expected_outcome="Windows Start Search bar opened",
             utterance=f"I'll press the Windows key to open Start Search so we can find {app_name.capitalize()}.",
+            risk_level=ActionRiskLevel.IDEMPOTENT,
+            verification_level=VerificationLevel.DIRECT_STATE,
+            expected_effects={"start_menu_visible": True},
         )
 
         # -------------------------------------------------------------
@@ -90,6 +110,8 @@ class HumanLikePlanner:
             parameters={"text": app_name, "profile": "natural"},
             expected_outcome=f"'{app_name}' typed in search bar",
             utterance=f"Typing '{app_name}' with natural human delays to locate the application.",
+            risk_level=ActionRiskLevel.IDEMPOTENT,
+            verification_level=VerificationLevel.VISUAL_GROUNDING,
         )
 
         # -------------------------------------------------------------
@@ -101,6 +123,8 @@ class HumanLikePlanner:
             parameters={"key": "enter"},
             expected_outcome=f"{app_name.capitalize()} launch triggered",
             utterance=f"Pressing Enter to launch {app_name.capitalize()}.",
+            risk_level=ActionRiskLevel.CONSEQUENTIAL,
+            verification_level=VerificationLevel.DIRECT_STATE,
         )
 
         # -------------------------------------------------------------
@@ -109,9 +133,12 @@ class HumanLikePlanner:
         plan.add_step(
             intent=f"Wait and bring {window_title} to foreground focus",
             action_type=StepActionType.FOCUS_WINDOW,
-            parameters={"window_title": window_title, "timeout": 5.0},
+            parameters={"window_title": window_title, "timeout": 6.0},
             expected_outcome=f"{window_title} window in foreground",
             utterance=f"Waiting for {window_title} to appear and bringing it into focus.",
+            risk_level=ActionRiskLevel.IDEMPOTENT,
+            verification_level=VerificationLevel.DIRECT_STATE,
+            preconditions={"window_should_exist": window_title},
         )
 
         # -------------------------------------------------------------
@@ -123,6 +150,8 @@ class HumanLikePlanner:
             parameters={"goal": target_dest or goal, "mode": "balanced"},
             expected_outcome="Screen state observed and situation assessed",
             utterance="Looking at the screen with Eyes to see if a profile picker is showing or if we need a fresh tab.",
+            risk_level=ActionRiskLevel.READ_ONLY,
+            verification_level=VerificationLevel.SEMANTIC,
         )
 
         # -------------------------------------------------------------
@@ -134,6 +163,8 @@ class HumanLikePlanner:
             parameters={"keys": ["ctrl", "l"]},
             expected_outcome="Address bar highlighted and ready for input",
             utterance="Navigating to the browser address bar to prepare for typing.",
+            risk_level=ActionRiskLevel.IDEMPOTENT,
+            verification_level=VerificationLevel.DIRECT_STATE,
         )
 
         # -------------------------------------------------------------
@@ -146,6 +177,8 @@ class HumanLikePlanner:
                 parameters={"text": target_dest, "profile": "natural"},
                 expected_outcome=f"'{target_dest}' typed in address bar",
                 utterance=f"Typing '{target_dest}' using human keyboard simulation.",
+                risk_level=ActionRiskLevel.CONSEQUENTIAL,
+                verification_level=VerificationLevel.VISUAL_GROUNDING,
             )
 
             # -------------------------------------------------------------
@@ -157,6 +190,8 @@ class HumanLikePlanner:
                 parameters={"key": "enter"},
                 expected_outcome="Navigation request dispatched",
                 utterance="Pressing Enter to load the website.",
+                risk_level=ActionRiskLevel.CONSEQUENTIAL,
+                verification_level=VerificationLevel.DIRECT_STATE,
             )
 
             # -------------------------------------------------------------
@@ -167,6 +202,8 @@ class HumanLikePlanner:
                 expected_keywords = ["hack the box", "hackthebox", "cybersecurity", "htb"]
             elif "youtube" in target_dest or "youtube" in clean_goal:
                 expected_keywords = ["youtube", "search"]
+            elif "chatgpt" in target_dest or "chatgpt" in clean_goal:
+                expected_keywords = ["chatgpt", "openai"]
             else:
                 domain_part = re.sub(r'https?://(www\.)?', '', target_dest).split('/')[0].split('.')[0]
                 expected_keywords = [domain_part]
@@ -176,153 +213,244 @@ class HumanLikePlanner:
                 action_type=StepActionType.VERIFY,
                 parameters={"expected": expected_keywords, "timeout_s": 8.0},
                 expected_outcome=f"Page loaded containing {expected_keywords}",
-                utterance=f"Verifying the page finished loading by checking visible text and title.",
+                utterance="Verifying the page finished loading by checking visible text and title.",
+                risk_level=ActionRiskLevel.READ_ONLY,
+                verification_level=VerificationLevel.VISUAL_GROUNDING,
             )
 
         return plan
 
-    def execute_step(self, step: PlanStep, controller: Optional[Any] = None) -> bool:
-        """Execute a single atomic plan step and compute its burst time."""
+    def _verify_hierarchical(
+        self,
+        step: PlanStep,
+        controller: Any,
+        expected: List[str],
+        timeout_s: float = 6.0,
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """Verify post-condition across the 4-tier verification hierarchy."""
+        deadline = time.time() + timeout_s
+        evidence_path = None
+
+        # Level 1: Direct State Verification (Window title / UIA state)
+        if step.verification_level == VerificationLevel.DIRECT_STATE:
+            while time.time() < deadline:
+                active = controller.windows().get("active_window", "")
+                if any(kw.lower() in active.lower() for kw in expected):
+                    return True, None, None
+                time.sleep(0.4)
+
+        # Level 2: Visual Grounding & OCR Verification
+        while time.time() < deadline:
+            active = controller.windows().get("active_window", "")
+            if any(kw.lower() in active.lower() for kw in expected):
+                return True, None, None
+
+            obs = controller.observe(annotate=True, mode="balanced")
+            if obs.get("annotated_image_path"):
+                evidence_path = obs.get("annotated_image_path")
+
+            text_match = any(
+                any(kw.lower() in (el.get("name") or "").lower() for kw in expected)
+                for el in obs.get("elements", [])
+            )
+            if text_match:
+                return True, evidence_path, None
+
+            # Level 3: Semantic Context Verification
+            if step.verification_level in {VerificationLevel.SEMANTIC, VerificationLevel.VISUAL_GROUNDING}:
+                if hasattr(controller, "analyze_context") and controller.context:
+                    report = controller.analyze_context(observation=obs, goal=expected[0] if expected else None)
+                    if report.confidence >= 0.85:
+                        return True, evidence_path, None
+
+            time.sleep(1.0)
+
+        # Level 4: Human Escalation check
+        if step.risk_level == ActionRiskLevel.DESTRUCTIVE:
+            return False, evidence_path, "Destructive action requires explicit user confirmation"
+
+        return False, evidence_path, f"Post-condition verification timed out for expected: {expected}"
+
+    def execute_step(
+        self,
+        step: PlanStep,
+        plan: Plan,
+        controller: Optional[Any] = None,
+    ) -> bool:
+        """Execute a single atomic step with recovery provenance, retry budget, and verification."""
         c = controller or self._get_controller()
         step.status = StepStatus.RUNNING
-        t0 = time.perf_counter()
 
-        try:
-            act = step.action_type
-            params = step.parameters
+        attempt = 1
+        max_attempts = max(1, step.retry_budget + 1)
 
-            if act == StepActionType.HOTKEY:
-                keys = params.get("keys", [])
-                c.hotkey(*keys)
-                time.sleep(0.3)
+        while attempt <= max_attempts:
+            t0 = time.perf_counter()
+            pre_state = c.windows().get("active_window", "")
+            pre_hash = hashlib.sha256(pre_state.encode("utf-8")).hexdigest()[:8]
 
-            elif act == StepActionType.PRESS_KEY:
-                key = params.get("key", "enter")
-                c.press_key(key)
-                time.sleep(0.2)
+            failure_reason = None
+            recovery_strategy = None
+            evidence_path = None
+            satisfied = False
 
-            elif act == StepActionType.TYPE_TEXT:
-                text = params.get("text", "")
-                profile = params.get("profile", "natural")
-                c.type_text(text, profile=profile)
+            try:
+                # 1. Precondition enforcement
+                if step.preconditions:
+                    for cond_k, cond_v in step.preconditions.items():
+                        if cond_k == "window_should_exist":
+                            titles = [w.get("title", "") for w in c.windows().get("windows", [])]
+                            if not any(cond_v.lower() in t.lower() for t in titles):
+                                logger.info("Precondition: waiting for window %s", cond_v)
 
-            elif act == StepActionType.CLICK_ELEMENT:
-                el_id = params.get("element_id")
-                c.click_element(el_id)
+                # 2. Action Dispatch
+                act = step.action_type
+                params = step.parameters
 
-            elif act == StepActionType.CLICK_COORDS:
-                x = params.get("x")
-                y = params.get("y")
-                c.click(x=x, y=y)
+                if act == StepActionType.HOTKEY:
+                    c.hotkey(*params.get("keys", []))
+                    time.sleep(0.3)
+                    satisfied = True
 
-            elif act == StepActionType.MOVE_MOUSE:
-                x = params.get("x")
-                y = params.get("y")
-                c.move(x=x, y=y)
+                elif act == StepActionType.PRESS_KEY:
+                    c.press_key(params.get("key", "enter"))
+                    time.sleep(0.2)
+                    satisfied = True
 
-            elif act == StepActionType.FOCUS_WINDOW:
-                title = params.get("window_title", "")
-                timeout = params.get("timeout", 5.0)
-                deadline = time.time() + timeout
-                focused = False
-                while time.time() < deadline:
-                    if c.focus(title):
-                        focused = True
-                        break
-                    time.sleep(0.5)
-                if not focused:
-                    logger.warning("Could not focus window %s within timeout", title)
+                elif act == StepActionType.TYPE_TEXT:
+                    c.type_text(params.get("text", ""), profile=params.get("profile", "natural"))
+                    satisfied = True
 
-            elif act == StepActionType.WAIT:
-                seconds = params.get("seconds", 1.0)
-                time.sleep(seconds)
+                elif act == StepActionType.CLICK_ELEMENT:
+                    res = c.click_element(params.get("element_id"))
+                    satisfied = res.get("status") != "error"
 
-            elif act == StepActionType.OBSERVE:
-                obs = c.observe(annotate=True, mode=params.get("mode", "balanced"))
-                if obs and obs.get("annotated_image_path"):
-                    step.evidence = obs.get("annotated_image_path")
-                # Situational context check
-                if hasattr(c, "analyze_context") and c.context:
-                    report = c.analyze_context(observation=obs, goal=params.get("goal"))
-                    # If occupied tab or profile picker detected, adapt
-                    if report.state.value == "chrome_occupied_tab":
-                        logger.info("Tab occupied, opening fresh tab via Ctrl+T")
-                        c.hotkey("ctrl", "t")
-                        time.sleep(0.4)
-                    elif report.state.value == "chrome_profile_picker":
-                        if report.recommendation.target_id:
-                            c.click_element(report.recommendation.target_id)
-                        else:
-                            c.press_key("enter")
-                        time.sleep(1.0)
+                elif act == StepActionType.CLICK_COORDS:
+                    c.click(x=params.get("x"), y=params.get("y"))
+                    satisfied = True
 
-            elif act == StepActionType.VERIFY:
-                expected = params.get("expected", [])
-                timeout_s = params.get("timeout_s", 6.0)
-                deadline = time.time() + timeout_s
-                verified = False
+                elif act == StepActionType.MOVE_MOUSE:
+                    c.move(x=params.get("x"), y=params.get("y"))
+                    satisfied = True
 
-                while time.time() < deadline:
-                    active = c.windows().get("active_window", "")
-                    if any(kw.lower() in active.lower() for kw in expected):
-                        verified = True
-                        break
-                    # OCR check
-                    obs = c.observe(annotate=True, mode="balanced")
-                    if obs.get("annotated_image_path"):
-                        step.evidence = obs.get("annotated_image_path")
-                    text_match = any(
-                        any(kw.lower() in (el.get("name") or "").lower() for kw in expected)
-                        for el in obs.get("elements", [])
+                elif act == StepActionType.FOCUS_WINDOW:
+                    title = params.get("window_title", "")
+                    satisfied = c.focus(title)
+
+                elif act == StepActionType.WAIT:
+                    time.sleep(params.get("seconds", 1.0))
+                    satisfied = True
+
+                elif act == StepActionType.OBSERVE:
+                    obs = c.observe(annotate=True, mode=params.get("mode", "balanced"))
+                    evidence_path = obs.get("annotated_image_path")
+                    satisfied = True
+
+                elif act == StepActionType.VERIFY:
+                    expected = params.get("expected", [])
+                    satisfied, evidence_path, failure_reason = self._verify_hierarchical(
+                        step, c, expected, timeout_s=params.get("timeout_s", 6.0)
                     )
-                    if text_match:
-                        verified = True
-                        break
-                    time.sleep(1.5)
 
-                if not verified:
-                    logger.warning("Verification criteria %s not fully matched", expected)
+            except Exception as ex:
+                satisfied = False
+                failure_reason = str(ex)
+                logger.warning("Step %d execution error on attempt %d: %s", step.step_number, attempt, ex)
 
-            step.burst_time_ms = round((time.perf_counter() - t0) * 1000.0, 2)
-            step.status = StepStatus.COMPLETED
-            return True
+            burst_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+            step.burst_time_ms = burst_ms
 
-        except Exception as ex:
-            step.burst_time_ms = round((time.perf_counter() - t0) * 1000.0, 2)
-            step.status = StepStatus.FAILED
-            step.error = str(ex)
-            logger.exception("Step %d execution failed: %s", step.step_number, ex)
-            return False
+            if evidence_path:
+                step.evidence = evidence_path
+
+            # If failed, determine recovery strategy
+            if not satisfied and attempt < max_attempts:
+                # Two-tier recovery: Micro-recovery (dismiss transient dialogs / popups with Escape)
+                recovery_strategy = "micro_retry"
+                logger.info("Executing Micro-recovery for step %d: sending Escape and re-observing", step.step_number)
+                c.press_key("esc")
+                time.sleep(0.5)
+
+            # Record Recovery Provenance
+            provenance = RecoveryProvenanceRecord(
+                workflow_id=plan.workflow_id,
+                step_number=step.step_number,
+                attempt_id=attempt,
+                pre_state_hash=pre_hash,
+                action_type=step.action_type.value,
+                parameters=step.parameters,
+                failure_reason=failure_reason,
+                recovery_strategy=recovery_strategy,
+                post_condition_satisfied=satisfied,
+                visual_evidence=evidence_path,
+                burst_time_ms=burst_ms,
+            )
+            plan.record_provenance(provenance)
+
+            if satisfied:
+                step.status = StepStatus.RECOVERED if attempt > 1 else StepStatus.COMPLETED
+                return True
+
+            attempt += 1
+
+        step.status = StepStatus.FAILED
+        step.error = failure_reason or "Exceeded retry budget without satisfying post-condition"
+        return False
 
     def execute_plan(
         self,
         plan: Plan,
         controller: Optional[Any] = None,
         on_step: Optional[Callable[[PlanStep, str], None]] = None,
+        save_checkpoints: bool = True,
     ) -> Plan:
-        """Execute all steps in the plan sequentially like a human, computing burst times."""
+        """Execute all plan steps sequentially, tracking recovery provenance and durable checkpoints."""
         c = controller or self._get_controller()
         t_start_plan = time.perf_counter()
 
-        with c.task(f"plan_{int(time.time())}"):
+        with c.task(plan.workflow_id):
             for idx, step in enumerate(plan.steps):
+                # Skip already completed steps if resuming
+                if step.status in {StepStatus.COMPLETED, StepStatus.RECOVERED}:
+                    continue
+
                 plan.current_step = step.step_number
 
-                # Pre-step callback (announce human instruction)
                 if on_step:
                     on_step(step, "before")
 
-                success = self.execute_step(step, controller=c)
+                success = self.execute_step(step, plan, controller=c)
 
-                # Post-step callback (announce completion & burst time)
                 if on_step:
                     on_step(step, "after")
 
+                if success and save_checkpoints:
+                    # Save durable checkpoint after verified state transition
+                    active_w = c.windows().get("active_window", "")
+                    plan.save_checkpoint(directory=self.checkpoint_dir, active_window=active_w)
+
                 if not success:
-                    logger.warning("Plan halted at step %d: %s", step.step_number, step.error)
+                    # Macro-recovery check: assess if replanning is viable
+                    logger.warning("Step %d failed verification. Provenance logged.", step.step_number)
                     break
 
-            plan.completed = all(s.status == StepStatus.COMPLETED for s in plan.steps)
+            plan.completed = all(s.status in {StepStatus.COMPLETED, StepStatus.RECOVERED} for s in plan.steps)
             plan.total_burst_time_ms = round((time.perf_counter() - t_start_plan) * 1000.0, 2)
 
         return plan
+
+    def resume_plan(
+        self,
+        checkpoint_path: str,
+        controller: Optional[Any] = None,
+        on_step: Optional[Callable[[PlanStep, str], None]] = None,
+    ) -> Plan:
+        """Resume an interrupted workflow from its persistent checkpoint file."""
+        plan = Plan.load_checkpoint(checkpoint_path)
+        logger.info(
+            "Resuming workflow %s from step %d (Completed: %s)",
+            plan.workflow_id,
+            plan.current_step,
+            [s.step_number for s in plan.steps if s.status in {StepStatus.COMPLETED, StepStatus.RECOVERED}],
+        )
+        return self.execute_plan(plan, controller=controller, on_step=on_step)

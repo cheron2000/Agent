@@ -1,9 +1,21 @@
-"""Unit tests for the Human-Like Planner Layer."""
+"""Unit tests for the Human-Like Planner Layer, Verification Tiers, Recovery Provenance, and Resumability."""
 
+import os
+import tempfile
 import pytest
 from unittest.mock import MagicMock, patch
 
-from Planner import HumanLikePlanner, Plan, PlanStep, StepActionType, StepStatus
+from Planner import (
+    ActionRiskLevel,
+    Checkpoint,
+    HumanLikePlanner,
+    Plan,
+    PlanStep,
+    RecoveryProvenanceRecord,
+    StepActionType,
+    StepStatus,
+    VerificationLevel,
+)
 
 
 def test_plan_goal_decomposition_hackthebox():
@@ -18,7 +30,8 @@ def test_plan_goal_decomposition_hackthebox():
     s1 = plan.steps[0]
     assert s1.action_type == StepActionType.HOTKEY
     assert s1.parameters.get("keys") == ["win"]
-    assert "start" in s1.intent.lower() or "win" in s1.parameters.get("keys", [])
+    assert s1.risk_level == ActionRiskLevel.IDEMPOTENT
+    assert s1.verification_level == VerificationLevel.DIRECT_STATE
 
     # Step 2: Type chrome
     s2 = plan.steps[1]
@@ -38,6 +51,7 @@ def test_plan_goal_decomposition_hackthebox():
             break
     assert nav_step is not None
     assert nav_step.action_type == StepActionType.TYPE_TEXT
+    assert nav_step.risk_level == ActionRiskLevel.CONSEQUENTIAL
 
 
 def test_plan_goal_decomposition_brave_youtube():
@@ -48,30 +62,93 @@ def test_plan_goal_decomposition_brave_youtube():
     assert any("youtube" in str(s.parameters.get("text", "")) for s in plan.steps)
 
 
-def test_plan_step_burst_time_tracking():
+def test_plan_step_burst_time_and_provenance_tracking():
     mock_controller = MagicMock()
     mock_controller.task.return_value.__enter__.return_value = mock_controller
     mock_controller.task.return_value.__exit__.return_value = None
+    mock_controller.windows.return_value = {"active_window": "Test App", "windows": []}
 
     planner = HumanLikePlanner(controller=mock_controller)
-    step = PlanStep(
-        step_number=1,
+    plan = Plan(goal="test type text")
+    step = plan.add_step(
         intent="Type hello",
         action_type=StepActionType.TYPE_TEXT,
         parameters={"text": "hello"},
     )
 
-    success = planner.execute_step(step, controller=mock_controller)
+    success = planner.execute_step(step, plan, controller=mock_controller)
     assert success is True
     assert step.status == StepStatus.COMPLETED
     assert step.burst_time_ms >= 0.0
+    assert len(plan.provenance_log) == 1
+
+    rec = plan.provenance_log[0]
+    assert rec.step_number == 1
+    assert rec.attempt_id == 1
+    assert rec.post_condition_satisfied is True
+    assert rec.action_type == "type_text"
     mock_controller.type_text.assert_called_once_with("hello", profile="natural")
+
+
+def test_micro_recovery_retry_on_failure():
+    mock_controller = MagicMock()
+    mock_controller.task.return_value.__enter__.return_value = mock_controller
+    mock_controller.task.return_value.__exit__.return_value = None
+    mock_controller.windows.return_value = {"active_window": "Wrong Window", "windows": []}
+    mock_controller.observe.return_value = {"elements": [], "active_window": "Wrong Window"}
+
+    planner = HumanLikePlanner(controller=mock_controller)
+    plan = Plan(goal="test verify")
+    step = plan.add_step(
+        intent="Verify target window",
+        action_type=StepActionType.VERIFY,
+        parameters={"expected": ["Target Expected Window"], "timeout_s": 0.1},
+        retry_budget=1,
+    )
+
+    success = planner.execute_step(step, plan, controller=mock_controller)
+    assert success is False
+    assert step.status == StepStatus.FAILED
+    assert len(plan.provenance_log) == 2  # 1 initial + 1 retry
+    assert plan.provenance_log[0].recovery_strategy == "micro_retry"
+    mock_controller.press_key.assert_called_with("esc")
+
+
+def test_checkpoint_persistence_and_resumption():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        mock_controller = MagicMock()
+        mock_controller.task.return_value.__enter__.return_value = mock_controller
+        mock_controller.task.return_value.__exit__.return_value = None
+        mock_controller.windows.return_value = {"active_window": "Google Chrome", "windows": []}
+
+        planner = HumanLikePlanner(controller=mock_controller, checkpoint_dir=temp_dir)
+        plan = Plan(goal="resumable workflow")
+        plan.add_step("Step 1", StepActionType.HOTKEY, {"keys": ["win"]})
+        plan.add_step("Step 2", StepActionType.PRESS_KEY, {"key": "enter"})
+
+        # Execute first step and save checkpoint
+        planner.execute_step(plan.steps[0], plan, controller=mock_controller)
+        cp_file = plan.save_checkpoint(directory=temp_dir, active_window="Google Chrome")
+
+        assert os.path.exists(cp_file)
+
+        # Resume from checkpoint
+        resumed_plan = Plan.load_checkpoint(cp_file)
+        assert resumed_plan.goal == "resumable workflow"
+        assert len(resumed_plan.steps) == 2
+        assert resumed_plan.steps[0].status == StepStatus.COMPLETED
+        assert resumed_plan.steps[1].status == StepStatus.PENDING
+
+        # Finish execution via resume_plan
+        finished_plan = planner.resume_plan(cp_file, controller=mock_controller)
+        assert finished_plan.steps[1].status == StepStatus.COMPLETED
 
 
 def test_execute_plan_with_callbacks():
     mock_controller = MagicMock()
     mock_controller.task.return_value.__enter__.return_value = mock_controller
     mock_controller.task.return_value.__exit__.return_value = None
+    mock_controller.windows.return_value = {"active_window": "Chrome", "windows": []}
 
     planner = HumanLikePlanner(controller=mock_controller)
     plan = Plan(goal="test goal")
@@ -86,7 +163,7 @@ def test_execute_plan_with_callbacks():
     def on_step(step, stage):
         callback_events.append((step.step_number, stage, step.intent))
 
-    executed_plan = planner.execute_plan(plan, controller=mock_controller, on_step=on_step)
+    executed_plan = planner.execute_plan(plan, controller=mock_controller, on_step=on_step, save_checkpoints=False)
 
     assert executed_plan.completed is True
     assert executed_plan.total_burst_time_ms >= 0.0

@@ -140,6 +140,46 @@ with client.task("automated_task"):
 | Scroll current app | `scroll()` | Send physical vertical/horizontal scroll events |
 | Send keyboard input | `type_text()`, `paste_text()`, `press_key()` | Physical typing, clipboard paste, and hotkey chords |
 
+## Verified Step Workflows
+
+`workflow_runner.py` provides a reusable executor for multi-step tasks. Each step
+has one atomic action and a mandatory post-condition. The runner retries failed
+steps within a bounded limit, optionally performs a recovery action, records
+verification evidence, and stops at the first failure by default.
+
+```python
+from ai_controller import DesktopAgentController
+from workflow_runner import WorkflowRunner
+
+desktop = DesktopAgentController()
+plan = [
+    {
+        "intent": "Click Save",
+        "action": "click_element",
+        "parameters": {"element_id": 12},
+        "verification": {"type": "text_contains", "expected": "Saved"},
+        "retries": 2,
+    },
+    {
+        "intent": "Confirm the target window",
+        "action": "wait",
+        "parameters": {"seconds": 1},
+        "verification": {"type": "active_window_contains", "expected": "Notepad"},
+    },
+]
+
+with desktop.task("save_document"):
+    result = WorkflowRunner(desktop).run(plan)
+    if not result["success"]:
+        raise RuntimeError(result)
+```
+
+Supported actions include `focus`, `click_element`, `type_text`, `paste_text`,
+`press_key`, `hotkey`, `scroll`, and `wait`. Supported post-conditions include
+`text_contains`, `text_not_contains`, `active_window_contains`, and
+`element_name_contains`. This layer deliberately uses the existing controller
+instead of duplicating the Eyes or Hands implementation.
+
 ## Screenshot Cleanup
 
 Use `with desktop.task("name"):` (or `with client.task("name"):`) when a task captures screenshots. Eyes tracks task screenshots and automatically purges them when the context exits.
