@@ -1,321 +1,419 @@
-# Workspace Analysis: f:\Shreyash DOC\shreyash\Agent
-
-## Executive Summary
-
-This is an **autonomous desktop AI agent** framework built in Python. The project gives any AI model (Claude, GPT-4o, Gemini, local Ollama LLaVA, etc.) the ability to **see, understand, and physically interact with a Windows desktop environment** — capturing the screen, reading text via OCR, finding UI elements, and driving mouse and keyboard. A dedicated PyQt6 browser window ("AI Desktop Canvas") acts as an isolated, bounded workspace, and all visual state is strictly confined to that canvas. The project is composed of four tightly integrated subsystems: **Eyes** (vision/perception), **Hands** (keyboard/mouse actuation), **canvas_desktop** (the isolated GUI workspace), and **ai_controller** (the orchestration bridge).
-
----
-
-## 1. Project Purpose
-
-The agent's goal is to let an LLM complete real desktop tasks — browsing the web, filling forms, clicking buttons, reading screen text, opening applications — with no human in the loop. It is designed to run on Windows with high-DPI awareness, ephemeral screenshot storage, and strict spatial bounding (all actions happen only inside the canvas viewport, not the host desktop at large).
+# Workspace Analysis Report
+**Generated:** Fresh read of `f:\Shreyash DOC\shreyash\Agent`  
+**Python runtime:** Python 3.14.2 (venv)  
+**Git branch:** `main` — up to date with `origin/main`  
+**Test suite status:** 44 tests pass (tests/), 24 tests pass (Hands/tests/) — zero failures
 
 ---
 
-## 2. Architecture Overview
+## Summary
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                   AI / LLM Client                         │
-│  (Claude Desktop, Cursor, GPT-4o, Antigravity, etc.)     │
-└────────────┬──────────────────────┬──────────────────────┘
-             │ MCP stdio            │ REST HTTP (port 8421)
-             ▼                      ▼
-     Eyes/eyes_mcp.py       Eyes/eyes_server.py (FastAPI)
-             │                      │
-             └──────────┬───────────┘
-                        │ Python SDK import
-                        ▼
-              ┌─────────────────────┐
-              │   ai_controller.py  │  ← Orchestration bridge
-              │  CanvasAIController │    (bounds + ephemeral lifecycle)
-              └────┬───────────┬────┘
-                   │           │
-          ┌────────▼─┐    ┌────▼──────────────┐
-          │  Eyes/   │    │  Hands/agent_hands │
-          │  eyes.py │    │  engine / mouse /  │
-          │ (vision) │    │  keyboard          │
-          └────┬─────┘    └────────────────────┘
-               │ reads canvas_state.json
-          ┌────▼──────────────────┐
-          │  canvas_desktop.py    │
-          │  AIDesktopCanvas      │  ← PyQt6 window + Chromium engine
-          │  (writes bounds live) │
-          └───────────────────────┘
-                        │
-              canvas_state.json  (shared IPC)
-```
+This is a **Windows-only direct desktop automation agent** — no virtual canvas, no browser sandbox, no mirror display. The system lets an AI drive the *actual visible Windows desktop* using physical mouse/keyboard primitives, a hybrid UI-element perception pipeline (Windows UIA + OCR + CV), and an authenticated localhost REST API.
+
+The codebase is in a **healthy, buildable, test-green state**. The last commit round (`f9472c1`) completed a significant cleanup: bearer auth, DNS rebinding protection, element-based grounding, and a multi-FEAT bugfix campaign. **There are 4 uncommitted local modifications** (`ARCHITECTURE.md`, `agent_server.py`, `ai_controller.py`, `api_client.py`, `AGENTS.md`) and **2 untracked directories** (`Context/`, `tests/test_context.py`) that represent newer work not yet staged.
+
+The outstanding work tracked in `.agents/tasks/task-desktop-agent-bugfix/` shows **FEAT-001** and **FEAT-002** as `completed`, while **FEAT-003** and **FEAT-004** remain `pending`. Critically, the **`parallel_desktop_server.py`** and **`parallel_canvas.py`** and **`canvas_desktop.py`** files referenced extensively in FEATs 001–004 **do not exist** on disk — they were targets of the FEAT-002 coder which created `parallel_desktop_server.py` from scratch, but the plan references a _canvas/Playwright architecture_ that appears to have been replaced by the current direct-desktop architecture.
 
 ---
 
-## 3. Key Files and Their Roles
+## 1. Architecture Overview
 
-### `canvas_desktop.py`
-- **Role**: The isolated GUI workspace. A `QMainWindow` (PyQt6) containing a full Chromium browser (`QWebEngineView`), a status HUD (badge, status label, viewport bounds display, ephemeral storage indicator), and a URL/navigation bar.
-- **Key detail**: On every `moveEvent`, `resizeEvent`, and `showEvent`, the window writes its exact global screen coordinates into `canvas_state.json`. A background thread refreshes this every 1 second.
-- **Startup**: `python canvas_desktop.py https://chatgpt.com` — accepts any URL as an argument.
+### Data flow: Observe → Reason → Act → Verify
 
-### `ai_controller.py`
-- **Role**: The central orchestrator. The `CanvasAIController` class reads `canvas_state.json` via `get_canvas_bounds()`, pushes those bounds into both `eyes.set_canvas_region()` and `hands_mouse.set_canvas_bounds()`, and exposes a context-manager (`task(name)`) that wraps a `TaskSession`. On exit, the session auto-deletes every screenshot taken during that task.
-- **Key methods**: `capture()`, `transcribe()`, `find_on_canvas()`, `click()`, `double_click()`, `scroll()`, `type_text()`, `paste_text()`, `press_key()`, `focus()`.
-
-### `canvas_state.json`
-- **Role**: Shared inter-process state file (IPC between `canvas_desktop.py` and `ai_controller.py`/`eyes.py`). Contains `bounds: [x, y, width, height]`, `hwnd` (window handle), and a `timestamp`.
-- **Live state**: At last run, the canvas was positioned at `(21, 133)` with size `1252×703` pixels (HWND `461172`).
-
-### `Eyes/eyes.py`
-- **Role**: The core perception engine. Single-file module (~850+ lines) providing:
-  - `capture()` — multi-tiered screen grabber (PIL `ImageGrab` → Windows GDI BitBlt → PyAutoGUI fallback), stores PNGs in `Eyes/screenshots/`
-  - `read_text()` — OCR via Tesseract, returning plain text or word-level bounding boxes + confidence
-  - `screen_map()` — Excel-style spatial grid (e.g. "A1", "H4") mapping OCR words to grid cells
-  - `find_on_screen()` — fuzzy text/label locator returning pixel-precise `(x, y)` centers
-  - `describe()` — sends screenshot to a vision LLM (Ollama LLaVA first, then OpenAI GPT-4o, then OCR fallback)
-  - `click()`, `type_text()`, `press_key()`, `scroll()`, `get_screen_info()` — direct PyAutoGUI interactions
-  - `TaskSession` / `start_task()` / `end_task()` — ephemeral lifecycle management
-- **Canvas bounding**: Module-level `_ACTIVE_CANVAS_REGION` restricts all operations to the canvas viewport when set.
-- **Tesseract paths probed**: `C:\Program Files\Tesseract-OCR\tesseract.exe`, `C:\Program Files (x86)\...`, and `~\AppData\Local\Programs\Tesseract-OCR\tesseract.exe`.
-- **Vision model**: Defaults to `llava:7b` via Ollama at `http://localhost:11434/api/generate` (configurable via `VISION_MODEL` and `OLLAMA_URL` env vars). Falls back to OpenAI `gpt-4o-mini` if `OPENAI_API_KEY` is set, then falls back to OCR-only.
-
-### `Eyes/eyes_mcp.py`
-- **Role**: MCP (Model Context Protocol) server exposing Eyes tools over stdio. Enables direct integration with Claude Desktop, Cursor, Continue, Antigravity, and any MCP-compliant host.
-- **Exposed tools**: `screen_capture`, `screen_ocr`, `screen_map`, `screen_find`, `screen_describe`, `screen_click`, `screen_type`, `screen_press_key`, `screen_scroll`, `screen_get_info`, `enhance_vision_prompt`.
-- **Prompt**: `eyes_master_prompt()` exposes the full cognitive system prompt as an MCP prompt resource.
-- **Transport**: `stdio` (standard MCP).
-
-### `Eyes/eyes_server.py`
-- **Role**: FastAPI REST server on port `8421`. Every `eyes.py` function is exposed as a POST or GET endpoint. Includes CORS middleware (open to all origins), Pydantic request models, and interactive Swagger UI at `http://localhost:8421/docs`.
-- **Endpoints**: `/api/capture`, `/api/ocr`, `/api/screen-map`, `/api/find`, `/api/click`, `/api/type`, `/api/press-key`, `/api/scroll`, `/api/describe`, `/api/enhance-prompt`, `/api/system-prompt`, `/api/health`, `/api/info`.
-
-### `Eyes/prompt_enhancer.py`
-- **Role**: Transforms vague user instructions into structured vision-grounded execution plans. Contains `MASTER_AI_EYES_SYSTEM_PROMPT` (the AI's cognitive system prompt with OBSERVE→ORIENT→DECIDE→ACT→VERIFY cycle) and the `PromptEnhancer` class. Also generates client-specific prompts for Claude and OpenAI.
-
-### `Hands/` (package: `agent_hands`)
-- **Role**: Physical keyboard and mouse actuation subsystem with a focus on **hyper-realistic human typing simulation**.
-- **`engine.py`**: `TypingEngine` class — Gaussian-distributed inter-key intervals, punctuation micro-pauses, cognitive hesitation pauses, optional QWERTY-adjacency typo simulation with backspace self-correction.
-- **`mouse.py`**: `click()`, `double_click()`, `right_click()`, `scroll()`, `move_to()` — all clamped to `_ACTIVE_CANVAS_BOUNDS` when set.
-- **`keyboard.py`**: `fast_paste()` (clipboard paste), `press_single_key()`.
-- **`windows.py`**: `focus_window()` — brings a named window to foreground.
-- **`config.py`**: Typing profiles — `natural` (~65 WPM), `fast` (~105 WPM), `careful` (~38 WPM), `coder` (~72 WPM).
-- **`server.py`**: MCP server for Hands tools (`hands_type_text`, `hands_click`, `hands_scroll`, etc.).
-- **`typos.py`**: QWERTY adjacency matrix for realistic typo simulation.
-- **Packaging**: Installed as an editable package (`pip install -e .`) with a `pyproject.toml`.
-
-### `tools.json`
-- **Role**: A tool registry listing 28 discrete desktop automation skills, each pointing to a script in `scripts/`. Tools include OS-level operations: `OPEN_APP`, `OPEN_BROWSER`, `SCREENSHOT`, `SYSTEM_INFO`, `SHUTDOWN`, `MUTE_VOLUME`, `SET_BRIGHTNESS`, and vision-grounded tools (`DESCRIBE_SCREEN`, `READ_SCREEN`, `FIND_ON_SCREEN`, `CLICK_ELEMENT`).
-
-### `scripts/`
-- **Role**: 24 standalone Python/PowerShell scripts implementing the tools registered in `tools.json`. Each script is independently executable and accepts CLI arguments (e.g. `--url`, `--target`, `--level`). Examples: `OPEN_APP.py`, `SCREENSHOT.py`, `DESCRIBE_SCREEN.py`, `CLICK_ELEMENT.py`, `SHUTDOWN.py`.
-
-### `Eyes/skills/`
-- **Role**: A bundled skills marketplace (appears to be an Anthropic/Claude plugin format — `.claude-plugin/marketplace.json`). Contains 19 skill packages: `academy-guide`, `algorithmic-art`, `brand-guidelines`, `canvas-design`, `claude-api`, `discernment-nudge`, `doc-coauthoring`, `docx`, `frontend-design`, `internal-comms`, `mcp-builder`, `pdf`, `pptx`, `skill-creator`, `slack-gif-creator`, `theme-factory`, `webapp-testing`, `web-artifacts-builder`, `xlsx`. Each skill has a `SKILL.md` and optional templates/scripts. These are capability packs that the AI agent can load on demand.
-
-### `Eyes/tool_schemas.json`
-- **Role**: Standard JSON tool-calling schemas for both OpenAI (function calling format) and Anthropic (tool use format). Provides plug-and-play integration for `screen_capture`, `screen_ocr`, `screen_find`, `screen_describe`, `screen_click`, `screen_type`, `screen_press_key`, `screen_scroll`, `enhance_vision_prompt`.
-
-### Log/State Files
-- **`canvas_state.json`**: Live IPC state (bounds, HWND, timestamp). Currently populated — the canvas was last active.
-- **`canvas_debug.log`**: Empty (debug logging not currently active).
-- **`err.log`**: Empty (no recent errors).
-- **`requirements.txt`**: Lists: `flask`, `flask-cors`, `requests`, `psutil`, `pyautogui`, `pillow`, `pycaw`, `comtypes`, `screen-brightness-control`, `pyperclip`, `pywin32`. Note: PyQt6, FastAPI, uvicorn, pytesseract, opencv-python, mcp are NOT listed here — they are likely installed in the venv separately or declared in `Hands/pyproject.toml`.
-
----
-
-## 4. Technology Stack
-
-| Layer | Technology |
-|---|---|
-| GUI Window | PyQt6 + QWebEngineView (Chromium) |
-| Vision/OCR | Tesseract OCR via pytesseract, PIL ImageGrab, Windows GDI BitBlt |
-| Vision LLM | Ollama (LLaVA 7B default), OpenAI GPT-4o-mini, Anthropic Claude (via API) |
-| Mouse/Keyboard | PyAutoGUI (with fail-safe), pywin32 |
-| REST API | FastAPI + Uvicorn (port 8421) |
-| MCP Server | `mcp` library (`MCPServer`, stdio transport) |
-| Typing Sim | Custom Gaussian keystroke timing engine (agent_hands) |
-| Packaging | pyproject.toml (Hands), pip venv |
-| OS | Windows only (GDI, DPI awareness, winId(), pywin32) |
-| Python | 3.14 (inferred from `cpython-314.pyc` cache files) |
-
----
-
-## 5. Data Flow Between Components
-
-### Task Execution Flow
 ```
-1. User/LLM issues a task instruction
-          ↓
-2. ai_controller.CanvasAIController.task("name") context enters
-          ↓
-3. sync_canvas_bounds() reads canvas_state.json → sets Eyes region + Hands bounds
-          ↓
-4. eyes.start_task() creates TaskSession (screenshot tracking begins)
-          ↓
-5. AI calls controller methods (capture / transcribe / find / click / type)
-     ↓                              ↓
-  eyes.py captures screen      agent_hands executes mouse/keyboard
-  within canvas bounds         within canvas bounds
-          ↓
-6. context exits → eyes.end_task() deletes all session screenshots
+Agent code (or REST client)
+        │
+        ▼
+DesktopAgentController  (ai_controller.py)
+   ├── Eyes (Eyes/)          ← Observe
+   │     ├── uia.py          Windows UI Automation accessibility tree
+   │     ├── ocr.py          Tesseract OCR with dark-theme inversion & phrase grouping
+   │     ├── cv_detect.py    Canny edge / contour CV fallback
+   │     ├── observe.py      IoU dedup + reading-order sort → Observation dataclass
+   │     ├── schema.py       UIElement, Observation; thread-safe element cache
+   │     ├── annotate.py     Set-of-Marks numbered badge overlay
+   │     └── diffing.py      Frame diff for polling sync
+   ├── Context (Context/)    ← Reason
+   │     ├── analyzer.py     Pattern-match rules → ContextReport
+   │     └── context_schema.py ScreenState enum, ActionRecommendation, ContextReport
+   └── Hands (Hands/agent_hands/)  ← Act
+         ├── mouse.py        PyAutoGUI + canvas bounds clamping
+         ├── keyboard.py     Key normalize, hotkey staggering, fast_paste clipboard
+         ├── engine.py       TypingEngine with 4 human-cadence profiles
+         ├── windows.py      WinAPI foreground focus, list_windows, ensure_interactive_desktop
+         └── config.py       TypingProfile dataclass + 4 PROFILES (natural/fast/careful/coder)
+        │
+        ▼
+agent_server.py  (FastAPI :8765)  — optional REST bridge
+        │   Bearer token auth, DNS rebinding defense (Host header check)
+        │   _eyes_lock + _hands_lock threading mutexes
+        ▼
+api_client.py  (DesktopAgentClient)  — HTTP wrapper with auto token discovery
 ```
 
-### MCP Integration Flow
-```
-LLM client (Claude Desktop, Cursor)
-  → stdio → eyes_mcp.py MCPServer
-  → calls eyes.py functions directly
-  → returns JSON results to LLM
-```
+### Element-based grounding pipeline
 
-### REST Integration Flow
 ```
-External agent / HTTP client
-  → POST http://localhost:8421/api/*
-  → eyes_server.py FastAPI endpoint
-  → calls eyes.py functions
-  → returns JSON response
-```
-
-### Canvas State IPC
-```
-canvas_desktop.py (PyQt6 window)
-  → on move/resize/show + every 1s timer
-  → writes canvas_state.json { bounds, hwnd, timestamp }
-        ↓
-ai_controller.py / eyes.py
-  → reads canvas_state.json on every operation
-  → all screen operations strictly inside those pixel bounds
+observe() call
+  ├─ UIA: pywinauto.UIAElementInfo (1.5s budget, depth-bounded)
+  │        fallback: uiautomation.WalkTree
+  ├─ OCR: pytesseract PSM-11, 2× upscale, dark-theme inversion, phrase grouping
+  └─ CV:  Canny edge contours (only when uia_elements < 10)
+            │
+            ▼
+  deduplicate_and_merge_elements()  — IoU > 0.4 merges OCR into UIA, UIA wins
+  sort_elements_reading_order()     — Y-band (24px) then X
+  Assign sequential IDs 1..N
+            │
+            ▼
+  Observation { observation_id, active_window, elements[], image_path, annotated_path }
+  → stored in _CURRENT_OBSERVATION (thread-safe, _OBS_LOCK)
+            │
+            ▼
+  resolve_element(id)  → UIElement → center (cx, cy)
+            │
+            ▼
+  click_element(id) → mouse.click(cx, cy)
 ```
 
 ---
 
-## 6. Eyes/ Subdirectory Structure
+## 2. Component Inventory
 
-```
-Eyes/
-├── eyes.py               ← Core vision + interaction engine (~850 lines)
-├── eyes_mcp.py           ← MCP server (stdio) — 11 tools + 1 prompt
-├── eyes_server.py        ← FastAPI REST server (port 8421) — 13 endpoints
-├── prompt_enhancer.py    ← Task prompt structuring + master system prompt
-├── tool_schemas.json     ← OpenAI + Anthropic JSON tool-calling schemas
-├── README.md             ← Integration guide (MCP, REST, SDK, CLI)
-├── PROMPTS.md            ← Prompt engineering reference
-├── test_demo.py          ← Demo/test file
-├── screenshots/          ← Ephemeral screenshot storage (auto-purged per task)
-└── skills/               ← Claude plugin marketplace (19 skill packs)
-    ├── .claude-plugin/
-    │   └── marketplace.json
-    ├── README.md
-    ├── THIRD_PARTY_NOTICES.md
-    └── skills/
-        ├── academy-guide/
-        ├── algorithmic-art/
-        ├── canvas-design/
-        ├── claude-api/
-        ├── docx/ pptx/ pdf/ xlsx/   (document generation skills)
-        ├── frontend-design/
-        ├── mcp-builder/
-        ├── webapp-testing/
-        └── ... (19 total)
-```
+### Root-level Python modules
+
+| File | Status | Role |
+|---|---|---|
+| `ai_controller.py` | ✅ Complete, **local uncommitted edits** | `DesktopAgentController` facade — Eyes + Context + Hands |
+| `agent_server.py` | ✅ Complete, **local uncommitted edits** | FastAPI REST server v1.1.0 on port 8765 |
+| `api_client.py` | ✅ Complete, **local uncommitted edits** | `DesktopAgentClient` HTTP wrapper |
+| `tools.json` | ✅ Present | 25 OS-tool declarations; scripts not implemented |
+| `pyproject.toml` | ✅ Present | setuptools build, pytest config, testpaths = tests + Hands/tests |
+| `requirements.txt` | ✅ Present (updated by FEAT-001) | Includes fastapi, uvicorn, pydantic, mcp, pytest, playwright==1.49.1 |
+
+### Eyes subsystem (`Eyes/`)
+
+| File | Status | Role |
+|---|---|---|
+| `eyes.py` | ✅ Complete | Primary façade; multi-tier screen grab (PIL/GDI/PyAutoGUI); OCR; find; observe; zoom; wait_for_text; task lifecycle |
+| `observe.py` | ✅ Complete | Multi-source merge pipeline with IoU dedup and reading-order sort |
+| `schema.py` | ✅ Complete | `UIElement`, `Observation` dataclasses; thread-safe element cache; `resolve_element()` |
+| `coords.py` | ✅ Complete | DPI init (per-monitor aware), `box_center`, `clamp_box`, `box_iou` |
+| `ocr.py` | ✅ Complete | Tesseract with preprocessing, dark-theme inversion, phrase grouping |
+| `uia.py` | ✅ Complete | pywinauto + uiautomation dual-path UIA extraction |
+| `cv_detect.py` | ✅ Complete | Canny contour detection + template matching |
+| `annotate.py` | ✅ Complete | Set-of-Marks badges, grid overlay, spatial text layout |
+| `diffing.py` | ✅ Complete | Frame diff, has_screen_changed, wait_until polling |
+| `eyes_server.py` | Present but not read | Likely standalone FastAPI server for Eyes only |
+| `eyes_mcp.py` | Present | MCP server wrapping Eyes tools |
+| `prompt_enhancer.py` | Present | Prompt enhancement utility |
+| `PLAN.md` | ✅ Present | 7-phase improvement roadmap (Phase 0–6 all pending) |
+
+### Context subsystem (`Context/`) — **Untracked / not committed**
+
+| File | Status | Role |
+|---|---|---|
+| `__init__.py` | ✅ Present | Re-exports ScreenState, ActionRecommendation, ContextReport, ContextAnalyzer |
+| `context_schema.py` | ✅ Present | `ScreenState` enum (9 states), `ActionRecommendation`, `ContextReport` dataclasses |
+| `analyzer.py` | ✅ Present | `ContextAnalyzer.analyze()` — rule-based pattern matching for Chrome, Instagram, dialogs, tabs |
+
+### Hands subsystem (`Hands/agent_hands/`)
+
+| File | Status | Role |
+|---|---|---|
+| `engine.py` | ✅ Complete | `TypingEngine` with 4 profiles, Gaussian jitter, typo simulation |
+| `mouse.py` | ✅ Complete | `click`, `move_to`, `scroll`, `drag_to` with canvas bounds clamping |
+| `keyboard.py` | ✅ Complete | `press_single_key`, `execute_hotkey`, `fast_paste` with clipboard restore |
+| `windows.py` | ✅ Complete | `list_windows`, `find_window`, `focus_window`, `get_active_window_title` |
+| `config.py` | ✅ Complete | `TypingProfile`, 4 PROFILES (natural 65wpm / fast 105wpm / careful 38wpm / coder 72wpm) |
+| `typos.py` | Present | QWERTY adjacency map for typo simulation |
+| `visual_overlay.py` | Present | Click ripple visual feedback |
+| `cli.py` | Present | CLI entry point |
+| `server.py` | Present | Likely separate Hands MCP/HTTP server |
+
+### Test suites
+
+| Location | Tests | Status |
+|---|---|---|
+| `tests/test_agent_server.py` | 14 tests | ✅ All pass — covers auth, host validation, click validation, task lifecycle, observe, zoom, wait, click_element |
+| `tests/test_api_client.py` | 5 tests | ✅ All pass — covers token init, click, task context manager, observe, click_element |
+| `tests/test_context.py` | 7 tests | ✅ All pass — covers Chrome profile picker, occupied/new tab, Instagram flow, dialogs, DesktopAgentController integration |
+| `tests/test_eyes_modular.py` | 14 tests | ✅ All pass — coords, schema, annotate, diffing, observe dedup+sort |
+| `Hands/tests/test_engine.py` | 4 tests | ✅ All pass |
+| `Hands/tests/test_mouse.py` | Present | ✅ Pass |
+| `Hands/tests/test_server.py` | Present | ✅ Pass |
+| `Hands/tests/test_typos.py` | Present | ✅ Pass |
+
+**Total: 68 tests, all green.**
 
 ---
 
-## 7. Hands/ Subdirectory and Skills
+## 3. Current Work In Progress
 
-### Hands/
+### Active FEAT task: `task-desktop-agent-bugfix`
+
+Tracked in `.agents/tasks/task-desktop-agent-bugfix/`.
+
+| FEAT | Status | Description |
+|---|---|---|
+| FEAT-001 | `completed` | Dependency drift, scripts/ stub, legacy canvas annotation |
+| FEAT-002 | `completed` | Input validation, task lifecycle, set_status XSS, order_chocolate hardening. Findings note: `parallel_desktop_server.py` **did not exist** and was created from scratch. |
+| FEAT-003 | **`pending`** | Replace print() with logging in canvas_desktop.py and ai_controller.py; staleness guard in get_canvas_bounds() |
+| FEAT-004 | **`pending`** | Smoke test suite `tests/test_server_smoke.py` for parallel_desktop_server.py endpoints |
+
+### Critical discrepancy: Missing canvas files
+
+**FEAT-002 findings state it "created parallel_desktop_server.py from scratch"** but this file is not present on disk. The FEAT-002 status is marked `completed` yet the file it was supposed to create (`parallel_desktop_server.py`) does not exist. Possible causes:
+
+1. Another agent working concurrently deleted or never committed the file.
+2. The FEAT coder ran in a different working directory and the file was created elsewhere.
+3. The file was staged/committed in an earlier state and then the branch diverged.
+
+This means **FEAT-003 and FEAT-004 are blocked** because they reference `canvas_desktop.py` and `parallel_desktop_server.py` — neither of which exist. The plan file at `.agents/tasks/plan.md` is also canvas-architecture-specific and references a `CanvasAIController` and `ParallelCanvasDesktop` that are absent from the current codebase.
+
+### Uncommitted modifications
+
+Four files have unstaged modifications relative to HEAD (`git status`):
+- `ARCHITECTURE.md` — documentation updates
+- `agent_server.py` — extended with Context layer route (`/context/analyze`) and `ContextAnalyzeRequest` model (confirmed by reading the current file vs HEAD)
+- `ai_controller.py` — added `Context` integration: `analyze_context()`, `step_with_context()` methods; module-level logger
+- `api_client.py` — added `analyze_context()` HTTP method
+
+Plus two untracked items:
+- `Context/` directory (complete new subsystem — analyzer, schema, __init__)
+- `tests/test_context.py` (7 passing tests for the Context layer)
+
+All these changes are consistent and represent a coherent **Context layer feature** that has been implemented locally but not committed.
+
+---
+
+## 4. Known Bugs and Issues
+
+### Bug 1 — `List` type not imported in `ai_controller.py`
+
+**Location:** `ai_controller.py`, line 12: `from typing import Any, Dict, Optional, Tuple`
+
+**Issue:** The `zoom()` method signature uses `Optional[List[int]]` for the `region` parameter, but `List` is not imported from `typing`. On Python 3.9+ this works at runtime because `list[int]` is the built-in syntax, but `Optional[List[int]]` in a function signature is evaluated lazily — so it doesn't currently raise `NameError` at import time. However it would fail if anyone calls `typing.get_type_hints(DesktopAgentController.zoom)`.
+
+**Fix:** Add `List` to the `from typing import` statement.
+
+### Bug 2 — `time` module used but not imported in `ai_controller.py` (`step_with_context`)
+
+**Location:** `ai_controller.py` in `step_with_context()`:
+```python
+elif act_type == "wait":
+    time.sleep(rec.params.get("seconds", 2.0))
 ```
-Hands/
-├── pyproject.toml           ← Package definition (agent_hands, pip install -e .)
-├── README.md                ← Integration guide (MCP, CLI, profiles)
-├── agent_hands/
+`time` is not imported in `ai_controller.py`. This will raise `NameError: name 'time' is not defined` at runtime when the Context layer recommends a `"wait"` action.
+
+**Fix:** Add `import time` near the top of `ai_controller.py`.
+
+### Bug 3 — `focus_window` has an unreachable `except` block after a `return`
+
+**Location:** `Hands/agent_hands/windows.py`, `focus_window()` function:
+```python
+        return True
+    except Exception:
+        try:
+            ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
+            return True
+        except Exception:
+            return False
+
+    except Exception:           # ← THIS SECOND except IS UNREACHABLE
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+            return True
+        except Exception:
+            return False
+```
+The second `except Exception` block on the outer try is dead code — a `return True` already exited the first inner `except` handler. The second outer `except` can never be reached because the outer try/except is closed by the first pair.
+
+**Severity:** Low — doesn't cause crashes; the fallback `win32gui.SetForegroundWindow` path is simply never exercised.
+
+**Fix:** Refactor the nested exception handling to correctly implement a two-level fallback.
+
+### Bug 4 — FEAT-003/004 blocked: referenced files do not exist
+
+**Files:** `canvas_desktop.py`, `parallel_desktop_server.py`, `parallel_canvas.py`
+
+FEAT-003 targets `canvas_desktop.py` (print-to-logging migration, staleness guard) and FEAT-004 targets `parallel_desktop_server.py` (smoke tests). Neither file exists on disk. The `plan.md` also references `CanvasAIController` in `ai_controller.py` and `ParallelCanvasDesktop` in `parallel_canvas.py` — both absent.
+
+FEAT-002 findings acknowledge it created `parallel_desktop_server.py` from scratch, but the file is gone. Something removed it (possibly a concurrent agent, a git restore, or file was never saved from the agent's context).
+
+### Bug 5 — `eyes.py` sets `pyautogui.FAILSAFE = False`
+
+**Location:** `Eyes/eyes.py`, `_get_deps()`:
+```python
+pyautogui.FAILSAFE = False
+```
+This disables the emergency corner fail-safe in the `_get_deps` context, which contradicts:
+- `Hands/agent_hands/keyboard.py`: `pyautogui.FAILSAFE = True`
+- `Hands/agent_hands/mouse.py`: `pyautogui.FAILSAFE = True`
+- AGENTS.md, ARCHITECTURE.md: "PyAutoGUI corner fail-safe is enabled"
+
+**Effect:** The last `import`/call wins in a single process. If `eyes.py`'s `_get_deps()` is called after `keyboard.py` initializes, fail-safe is turned OFF. The Hands module always sets it True, but if Eyes calls `_get_deps()` late in a task, fail-safe becomes False.
+
+**Fix:** Remove `pyautogui.FAILSAFE = False` from `_get_deps()` in `eyes.py`, or set it consistently to True everywhere.
+
+### Bug 6 — `test_context.py` and `Context/` are untracked
+
+These files exist locally and all 7 Context tests pass, but they are not committed or staged. Any other agent working in the same repo would not see them. A concurrent git operation or `git checkout` could wipe them.
+
+---
+
+## 5. Architecture Decisions Confirmed
+
+1. **No canvas/mirror/sandbox**: All perception and action operate on the live Windows desktop. `_ACTIVE_CANVAS_REGION` in `eyes.py` and `_ACTIVE_CANVAS_BOUNDS` in `mouse.py` allow *region restriction* but do not create a secondary display.
+
+2. **Element IDs are observation-scoped, not stable**: `UIElement.id` is assigned sequentially `1..N` per observation call (`observe.py`, line `el.id = idx`). IDs change every `observe()` call. `resolve_element()` only resolves from `_CURRENT_OBSERVATION` (the most recent call). Agents must re-observe before acting on a stale ID.
+
+3. **Thread safety**: The REST server holds `_eyes_lock` and `_hands_lock` per-endpoint. The element observation cache uses `_OBS_LOCK`. However the direct `DesktopAgentController` (used by Python agents, not the REST server) has **no locking** — multiple Python agents importing and calling `DesktopAgentController` concurrently will share `_CURRENT_OBSERVATION` unsafely.
+
+4. **Screenshot lifecycle**: `TaskSession` tracks ephemeral screenshot paths. `end_task()` deletes them. The context manager in `DesktopAgentController.task()` is the correct usage pattern. If multiple agents call `start_task()` concurrently without the REST server's mutex, the previous task session is overwritten silently (`_ACTIVE_TASK_SESSION = TaskSession(...)` in `eyes.py`).
+
+5. **Context Layer is rule-based, not ML-based**: `ContextAnalyzer` uses string matching, role checks, and element name patterns. Currently handles: Chrome profile picker, occupied/new tab, Instagram login flow (three sub-states), dialog/popup dismissal, and generic fallback. 9 ScreenState values defined.
+
+6. **No authentication on `DesktopAgentController`**: The Python façade has no token or access control. Authentication is only enforced at the REST layer (`agent_server.py`). Multiple agents using the Python façade directly share one desktop with no coordination.
+
+---
+
+## 6. Concurrent Modification Risk Assessment
+
+Because multiple agents may be running against this workspace simultaneously:
+
+| Risk | Severity | Description |
+|---|---|---|
+| Shared `_CURRENT_OBSERVATION` | **High** | Module-level global with `_OBS_LOCK` only on reads/writes; but two agents calling `observe()` in parallel will each overwrite the other's observation, causing stale element ID resolution |
+| Shared `_ACTIVE_TASK_SESSION` | **High** | Only one task session exists globally; concurrent `start_task()` calls silently terminate the previous session and may leak screenshots |
+| Concurrent physical input | **Medium** | REST server uses `_hands_lock`; Python-direct agents have no mutex; two agents typing simultaneously on the same keyboard will interleave keystrokes |
+| Files created by FEATs not committed | **High** | `Context/`, `tests/test_context.py`, and local edits to 4 files are NOT committed; a `git checkout` or `git reset` by any agent would permanently destroy this work |
+| FEAT-002 artifact (parallel_desktop_server.py) missing | **High** | FEAT-002 marked completed but its primary output is absent; FEAT-003/004 depend on it and are blocked |
+| Screenshot directory shared | **Low** | `Eyes/screenshots/` is shared; task cleanup purges only screenshots registered to the active TaskSession; a concurrent session's screenshots would not be purged |
+
+---
+
+## 7. Open Issues / Gaps by Priority
+
+### P0 — Blocking
+
+1. **`parallel_desktop_server.py` missing** — FEAT-002 is marked `completed` but the file does not exist. FEAT-003 and FEAT-004 cannot proceed. Agents planning to run FEAT-003 or FEAT-004 will fail immediately.
+
+2. **`canvas_desktop.py` missing** — Referenced by FEAT-003 and `plan.md`; does not exist on disk. The FEAT-003 step for `canvas_desktop.py` cannot be applied.
+
+3. **`time` not imported in `ai_controller.py`** — `step_with_context()` will crash with `NameError` when the Context engine recommends a `"wait"` action (Bug 2 above).
+
+### P1 — Correctness
+
+4. **`FAILSAFE = False` in `eyes.py`** — contradicts documented safety guarantee; can silently disable corner fail-safe depending on import order.
+
+5. **`Context/` directory not committed** — All Context work is local-only. Any git operation by another agent or user could delete it irreversibly.
+
+6. **`List` not imported in `ai_controller.py`** — `zoom()` type hint uses `List[int]` without importing `List`; introspection-based tools will fail.
+
+### P2 — Quality / Technical Debt
+
+7. **Unreachable except block in `windows.py`** (`focus_window`) — dead code, `win32gui` fallback is never exercised.
+
+8. **`pyproject.toml` CI matrix covers Python 3.11/3.12** but the local venv runs **Python 3.14.2**. `playwright==1.49.1` in requirements.txt cannot be installed on 3.14 (no greenlet wheel; FEAT-001 found this and installed 1.64.0 instead). The pinned version in requirements.txt is stale/inaccurate.
+
+9. **`eyes.py` CLI `click()` function shadow** — `eyes.py` defines a top-level `click()` function (line ~470) and also imports `from agent_hands...` style through `ai_controller.py`. Within `eyes.py` itself, the local `click()` function could shadow PyAutoGUI's click if called incorrectly. (No bug currently, but fragile.)
+
+10. **`scripts/` directory contains only `README.md`** — all 25 tools in `tools.json` reference unimplemented scripts. Any agent invoking those tools via `tools.json` will fail with file-not-found at runtime.
+
+11. **`Eyes/PLAN.md` phases 0–7 all pending** — the improvement roadmap (DOM adapter, fuzzy matching, action verifier, native safety hardening, eval suite) has not been started. The codebase is at the "current baseline" described in Phase 0.
+
+12. **`memory/` directory exists but was not investigated** — may contain persistent agent state or knowledge base; unclear purpose.
+
+13. **`tools.json` has a typo**: `"START_OLLLAMA_SERVER"` (triple L). The referenced script is also absent.
+
+---
+
+## 8. Recommendations
+
+1. **Immediately commit the Context layer work** (`Context/`, `tests/test_context.py`, plus the 4 modified files) before any git operations corrupt local state. All 68 tests pass and the code is clean.
+
+2. **Recreate `parallel_desktop_server.py`** — FEAT-002's findings describe its full structure. Either re-run FEAT-002 or manually author the file from the plan/findings. Without it, FEAT-003 and FEAT-004 are blocked.
+
+3. **Fix Bug 2** — add `import time` to `ai_controller.py` before the `step_with_context` method fails in production use.
+
+4. **Fix Bug 5** — remove `pyautogui.FAILSAFE = False` from `eyes.py`'s `_get_deps()`.
+
+5. **Unblock FEAT-003**: once `canvas_desktop.py` context is resolved (either create the file or redirect FEAT-003 to the equivalent logging-migration work in the existing `ai_controller.py`), the logging migration is straightforward.
+
+6. **FEAT-004 smoke tests**: `tests/test_server_smoke.py` requires `parallel_desktop_server.py` to exist. Either create it first (from FEAT-002 findings), or adapt the smoke tests to target `agent_server.py` (which exists and is fully tested).
+
+7. **Update `requirements.txt`** — change `playwright==1.49.1` to `playwright==1.64.0` (the version that actually installs on Python 3.14).
+
+8. **Address concurrent agent safety**: add a `threading.Lock` around `_ACTIVE_TASK_SESSION` modifications in `eyes.py`, and consider using per-agent task namespaces to avoid cross-contamination in multi-agent scenarios.
+
+---
+
+## 9. File Reference Map
+
+```
+f:\Shreyash DOC\shreyash\Agent\
+├── ai_controller.py          PRIMARY facade (modified, not committed)
+├── agent_server.py           REST API v1.1.0 :8765 (modified, not committed)
+├── api_client.py             HTTP client (modified, not committed)
+├── AGENTS.md                 Agent operating guide (modified, not committed)
+├── ARCHITECTURE.md           Architecture doc (modified, not committed)
+├── requirements.txt          Dependencies (updated by FEAT-001)
+├── pyproject.toml            Build + pytest config
+├── tools.json                25 tool declarations (scripts NOT implemented)
+├── err.log                   Log output (gitignored)
+├── Eyes/
+│   ├── eyes.py               Vision facade (capture, OCR, observe, find, zoom, wait_for_text)
+│   ├── observe.py            UIA+OCR+CV merge pipeline
+│   ├── schema.py             UIElement, Observation, element cache
+│   ├── coords.py             DPI, box math, IoU
+│   ├── ocr.py                Tesseract preprocessing + phrase grouping
+│   ├── uia.py                Windows UIA extraction (pywinauto + uiautomation)
+│   ├── cv_detect.py          CV contour fallback
+│   ├── annotate.py           Set-of-Marks overlay
+│   ├── diffing.py            Frame diff + polling
+│   ├── eyes_mcp.py           MCP server wrapper
+│   ├── eyes_server.py        Standalone Eyes FastAPI
+│   ├── PLAN.md               7-phase improvement roadmap (all pending)
+│   └── screenshots/          Ephemeral screenshot storage (gitignored except .gitkeep)
+├── Hands/
+│   ├── agent_hands/
+│   │   ├── engine.py         TypingEngine
+│   │   ├── mouse.py          click, move_to, scroll, drag_to
+│   │   ├── keyboard.py       press_single_key, execute_hotkey, fast_paste
+│   │   ├── windows.py        focus_window, list_windows, get_active_window_title
+│   │   ├── config.py         TypingProfile, PROFILES
+│   │   ├── typos.py          QWERTY typo adjacency
+│   │   ├── visual_overlay.py Click ripple
+│   │   ├── server.py         Hands server
+│   │   └── cli.py            CLI
+│   └── tests/                24 tests (all green)
+├── Context/                  UNTRACKED — not committed
 │   ├── __init__.py
-│   ├── engine.py            ← TypingEngine (Gaussian cadence, typos)
-│   ├── keyboard.py          ← fast_paste(), press_single_key()
-│   ├── mouse.py             ← click, scroll, move_to — canvas-bounded
-│   ├── windows.py           ← focus_window()
-│   ├── config.py            ← Typing profiles (natural/fast/careful/coder)
-│   ├── typos.py             ← QWERTY adjacency matrix
-│   ├── server.py            ← MCP server for Hands tools
-│   ├── cli.py               ← agent-hands CLI
-│   └── visual_overlay.py   ← (likely debug visual feedback)
-├── tests/                   ← pytest test suite
-│   ├── test_engine.py
-│   ├── test_mouse.py
-│   ├── test_server.py
-│   └── test_typos.py
-└── skills/                  ← Same Claude plugin marketplace (copy/symlink)
+│   ├── analyzer.py           ContextAnalyzer rule engine
+│   └── context_schema.py     ScreenState, ActionRecommendation, ContextReport
+├── tests/
+│   ├── test_agent_server.py  14 tests (all green)
+│   ├── test_api_client.py    5 tests (all green)
+│   ├── test_context.py       7 tests (all green) — UNTRACKED
+│   └── test_eyes_modular.py  14 tests (all green)
+├── .agents/
+│   ├── skills/atomic-step-task-planner/SKILL.md
+│   └── tasks/
+│       ├── plan.md           Implementation plan (canvas-architecture specific)
+│       ├── workspace-analysis.md  (this file)
+│       └── task-desktop-agent-bugfix/
+│           ├── task.json     status: pending (FEAT-003, FEAT-004 outstanding)
+│           ├── context.json  project context snapshot
+│           └── features/
+│               ├── FEAT-001.json  completed
+│               ├── FEAT-002.json  completed (but parallel_desktop_server.py MISSING)
+│               ├── FEAT-003.json  pending (blocked: canvas_desktop.py missing)
+│               └── FEAT-004.json  pending (blocked: parallel_desktop_server.py missing)
+└── scripts/
+    └── README.md             Stub noting scripts are not yet implemented
 ```
 
-### Eyes/skills/ skill packs
-The 19 skill packs are pre-built capability modules for Claude:
-- **Document skills**: `docx`, `pdf`, `pptx`, `xlsx` — generate/edit Office documents
-- **Design skills**: `canvas-design`, `algorithmic-art`, `brand-guidelines`, `theme-factory`, `frontend-design`
-- **Development skills**: `claude-api`, `mcp-builder`, `webapp-testing`, `web-artifacts-builder`
-- **Communication skills**: `internal-comms`, `slack-gif-creator`, `doc-coauthoring`, `academy-guide`
-- **Meta skills**: `skill-creator`, `discernment-nudge`
-
 ---
 
-## 8. Configuration Files
-
-| File | Purpose |
-|---|---|
-| `canvas_state.json` | Live canvas viewport IPC state |
-| `tools.json` | Tool registry for 28 desktop automation scripts |
-| `requirements.txt` | Python dependencies (partial — missing PyQt6, FastAPI, pytesseract) |
-| `Hands/pyproject.toml` | `agent_hands` package definition + entry points |
-| `Eyes/tool_schemas.json` | JSON tool schemas for OpenAI and Anthropic API integration |
-| `Eyes/skills/.claude-plugin/marketplace.json` | Claude plugin marketplace manifest |
-| `venv/` | Python virtual environment |
-
----
-
-## 9. Summary: What This Project Does and How It's Used
-
-This project is a **complete desktop AI agent runtime for Windows**. Here is how it is used:
-
-**Mode 1 — Integrated agent (ai_controller + canvas_desktop)**
-1. Launch `python canvas_desktop.py https://chatgpt.com` to open the isolated browser canvas.
-2. In your agent code, instantiate `CanvasAIController()`.
-3. Wrap tasks in `with controller.task("name") as task:` — all perception and interaction are spatially bounded and screenshots are auto-deleted at the end.
-
-**Mode 2 — MCP server for Claude Desktop / Cursor**
-1. Point your MCP client config at `Eyes/eyes_mcp.py` (stdio) or `Hands/agent_hands/server.py`.
-2. The AI model gains `screen_capture`, `screen_ocr`, `screen_find`, `screen_click`, `hands_type_text`, etc. as native tools.
-
-**Mode 3 — REST API for any agent**
-1. Run `python Eyes/eyes_server.py` to start the FastAPI server on port 8421.
-2. Any external agent, script, or service calls HTTP endpoints to perceive and act on the desktop.
-
-**Mode 4 — Standalone CLI**
-- `python Eyes/eyes.py capture` / `ocr` / `find "Search"` / `click --target Submit`
-- `agent-hands type "Hello world" --wpm 65 --typos`
-
----
-
-## 10. Issues and Recommendations
-
-### Issues Found
-
-1. **`requirements.txt` is incomplete**: PyQt6, FastAPI, uvicorn, pytesseract, opencv-python, numpy, and the `mcp` library are all imported in the code but not listed. A developer following only `requirements.txt` will face import errors.
-   - **Recommendation**: Audit all imports across `canvas_desktop.py`, `eyes.py`, `eyes_server.py`, `eyes_mcp.py`, and consolidate into a complete `requirements.txt` or move to a `pyproject.toml` for the top-level package.
-
-2. **`canvas_state.json` coupling**: The IPC between `canvas_desktop.py` and `ai_controller.py` uses a JSON file on disk. If the canvas is not running, `get_canvas_bounds()` returns `None` silently and all Eyes/Hands operations fall back to the full screen — this is a potential containment violation.
-   - **Recommendation**: Add an explicit check in `ai_controller.sync_canvas_bounds()` and raise or warn loudly when the canvas is not running rather than silently degrading to full-screen mode.
-
-3. **`eyes_mcp.py` uses `from mcp.server.mcpserver import MCPServer`**: The import path `mcp.server.mcpserver` is non-standard (the official `mcp` SDK uses `mcp.server`). This may break depending on the installed `mcp` version.
-   - **Recommendation**: Verify the installed MCP SDK version and align the import path.
-
-4. **CORS is fully open in `eyes_server.py`** (`allow_origins=["*"]`): This is fine for local-only use but is a risk if the server is accidentally exposed on a network interface.
-   - **Recommendation**: Default the server to `127.0.0.1` only (which it already does in `start_server()`), and document that it must not be exposed on `0.0.0.0` without auth.
-
-5. **No `START_OLLLAMA_SERVER` typo fix**: `tools.json` contains `"START_OLLLAMA_SERVER"` (three L's) — a minor naming inconsistency.
-   - **Recommendation**: Rename the key to `START_OLLAMA_SERVER` for consistency.
-
-6. **Skills directory duplicated**: The `Eyes/skills/` directory appears in both `Eyes/` and `Hands/` — likely a copy rather than a symlink. This will cause the two copies to drift out of sync.
-   - **Recommendation**: Keep one canonical copy at the project root (`Agent/skills/`) and reference it from both, or use a git submodule.
-
-7. **Python 3.14 pre-release**: The `__pycache__` bytecode shows `cpython-314`, meaning this runs on a pre-release Python version. PyQt6, numpy, and several other native extension packages may not have stable wheels for 3.14 yet.
-   - **Recommendation**: Pin to Python 3.11 or 3.12 (the latest stable release) for maximum package compatibility.
-
-8. **`canvas_debug.log` and `err.log` are empty**: These log files exist but contain nothing. The codebase uses `print()` for logging rather than Python's `logging` module.
-   - **Recommendation**: Wire `ai_controller.py` and `canvas_desktop.py` to the `logging` module and configure handlers to write to these log files, enabling proper debugging.
+*Report generated by read-only workspace investigation. No files were modified.*
