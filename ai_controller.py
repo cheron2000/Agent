@@ -71,8 +71,13 @@ except ImportError:
         VerificationStatus = None
         ActionRecoveryDecider = None
         RecoveryDecision = None
-        RecoveryStrategy = None
-        ActionOrchestrator = None
+try:
+    from Planner.goal_schema import ExecutionPlan, PlanStep
+    from Planner.goal_executor import AutonomousGoalExecutor
+except (ImportError, ValueError):
+    ExecutionPlan = None
+    PlanStep = None
+    AutonomousGoalExecutor = None
 
 
 class DesktopAgentController:
@@ -87,6 +92,9 @@ class DesktopAgentController:
             verifier=self.verifier,
             recovery_decider=self.recovery_decider,
         ) if ActionOrchestrator else None
+        self.goal_executor = AutonomousGoalExecutor(
+            orchestrator=self.orchestrator,
+        ) if AutonomousGoalExecutor and self.orchestrator else None
 
     @contextmanager
     def task(self, task_name: str = "desktop_task"):
@@ -353,6 +361,13 @@ class DesktopAgentController:
         if self.orchestrator is None:
             raise RuntimeError("ActionOrchestrator is not available.")
         return self.orchestrator.execute_step(intent, pre_observation=pre_observation)
+
+    def execute_goal(self, plan: Any) -> Dict[str, Any]:
+        """Execute a multi-step DAG plan with durable SQLite checkpointing and compensatory recovery."""
+        if self.goal_executor is None:
+            raise RuntimeError("AutonomousGoalExecutor is not available.")
+        res = self.goal_executor.execute_plan(plan)
+        return res.to_dict()
 
 
 if __name__ == "__main__":

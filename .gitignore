@@ -34,4 +34,7 @@ token.txt
 err.log
 *.key
 *.pem
+memory/*.db
+memory/*.db-wal
+memory/*.db-shm
 
