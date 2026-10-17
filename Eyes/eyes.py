@@ -1018,10 +1018,10 @@ def ground_target(
 ) -> Dict[str, Any]:
     """Locate candidate UI element coordinates matching a natural language instruction."""
     try:
-        from .visual_grounding import InstructionGrounder
+        from .visual_grounding import get_default_grounder
     except ImportError:
         try:
-            from visual_grounding import InstructionGrounder
+            from visual_grounding import get_default_grounder
         except ImportError:
             return {"success": False, "candidates": [], "error": "Visual grounding subsystem not available"}
 
@@ -1029,7 +1029,7 @@ def ground_target(
     shot = _grab_screen(region=active_region)
     offset = (active_region[0], active_region[1]) if active_region else (0, 0)
 
-    grounder = InstructionGrounder()
+    grounder = get_default_grounder()
     candidates = grounder.ground_target(shot, instruction, offset=offset, min_confidence=min_confidence)
     return {
         "success": True,

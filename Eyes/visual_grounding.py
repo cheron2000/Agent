@@ -14,6 +14,7 @@ Architectural principles:
 
 from dataclasses import dataclass, field
 import logging
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 
@@ -23,6 +24,8 @@ except ImportError:
     from coords import box_center, clamp_box, get_screen_size
 
 logger = logging.getLogger("eyes.visual_grounding")
+_grounder_lock = threading.RLock()
+_default_grounder: Optional["InstructionGrounder"] = None
 
 
 @dataclass
@@ -72,6 +75,7 @@ class Florence2GroundingBackend(VisualGroundingBackend):
         self._model = None
         self._processor = None
         self._initialized = False
+        self._lock = threading.RLock()
 
     def is_available(self) -> bool:
         try:
@@ -82,33 +86,34 @@ class Florence2GroundingBackend(VisualGroundingBackend):
             return False
 
     def _ensure_model(self) -> bool:
-        if self._initialized:
-            return self._model is not None
+        with self._lock:
+            if self._initialized:
+                return self._model is not None
 
-        self._initialized = True
-        try:
-            import torch
-            from transformers import AutoModelForCausalLM, AutoProcessor
+            self._initialized = True
+            try:
+                import torch
+                from transformers import AutoModelForCausalLM, AutoProcessor
 
-            if self._device is None:
-                self._device = "cuda" if torch.cuda.is_available() else "cpu"
+                if self._device is None:
+                    self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
-            torch_dtype = torch.float16 if self._device == "cuda" else torch.float32
+                torch_dtype = torch.float16 if self._device == "cuda" else torch.float32
 
-            logger.info("Loading Florence-2 visual grounding model on %s (%s)...", self._device, torch_dtype)
-            self._model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                torch_dtype=torch_dtype,
-                trust_remote_code=True,
-            ).to(self._device).eval()
+                logger.info("Loading Florence-2 visual grounding model on %s (%s)...", self._device, torch_dtype)
+                self._model = AutoModelForCausalLM.from_pretrained(
+                    self.model_id,
+                    torch_dtype=torch_dtype,
+                    trust_remote_code=True,
+                ).to(self._device).eval()
 
-            self._processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True)
-            return True
-        except Exception as ex:
-            logger.warning("Could not initialize Florence-2 visual model: %s", ex)
-            self._model = None
-            self._processor = None
-            return False
+                self._processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True)
+                return True
+            except Exception as ex:
+                logger.warning("Could not initialize Florence-2 visual model: %s", ex)
+                self._model = None
+                self._processor = None
+                return False
 
     def ground(
         self,
@@ -125,24 +130,25 @@ class Florence2GroundingBackend(VisualGroundingBackend):
             task_prompt = "<CAPTION_TO_PHRASE_GROUNDING>"
             prompt = f"{task_prompt}{instruction}"
 
-            inputs = self._processor(text=prompt, images=image, return_tensors="pt")
-            if self._device == "cuda":
-                inputs = {k: v.to(self._device) for k, v in inputs.items()}
+            with self._lock:
+                inputs = self._processor(text=prompt, images=image, return_tensors="pt")
+                if self._device == "cuda":
+                    inputs = {k: v.to(self._device) for k, v in inputs.items()}
 
-            with torch.no_grad():
-                generated_ids = self._model.generate(
-                    input_ids=inputs["input_ids"],
-                    pixel_values=inputs.get("pixel_values"),
-                    max_new_tokens=1024,
-                    num_beams=3,
+                with torch.no_grad():
+                    generated_ids = self._model.generate(
+                        input_ids=inputs["input_ids"],
+                        pixel_values=inputs.get("pixel_values"),
+                        max_new_tokens=1024,
+                        num_beams=3,
+                    )
+
+                generated_text = self._processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+                parsed_answer = self._processor.post_process_generation(
+                    generated_text,
+                    task=task_prompt,
+                    image_size=(image.width, image.height),
                 )
-
-            generated_text = self._processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
-            parsed_answer = self._processor.post_process_generation(
-                generated_text,
-                task=task_prompt,
-                image_size=(image.width, image.height),
-            )
 
             results: List[GroundingCandidate] = []
             grounding_data = parsed_answer.get(task_prompt, {})
@@ -203,6 +209,7 @@ class CVGroundingBackend(VisualGroundingBackend):
         candidates: List[GroundingCandidate] = []
 
         clean_inst = instruction.strip().lower()
+        role_mentioned = any(kw in clean_inst for kw in ["button", "icon", "box", "field", "input", "control"])
 
         for c in controls:
             box = [
@@ -213,8 +220,17 @@ class CVGroundingBackend(VisualGroundingBackend):
             ]
             center = box_center(box)
 
-            # Assign heuristic confidence based on aspect ratio and control role
-            conf = 0.65 if c.role == "Button" else 0.50
+            # Explicitly separate genuine semantic match from unranked generic visual regions
+            if c.role.lower() in clean_inst:
+                conf = 0.65
+                semantic_match = True
+            elif role_mentioned:
+                conf = 0.50
+                semantic_match = True
+            else:
+                conf = 0.40
+                semantic_match = False
+
             candidates.append(
                 GroundingCandidate(
                     box=box,
@@ -222,7 +238,11 @@ class CVGroundingBackend(VisualGroundingBackend):
                     confidence=conf,
                     label=f"Visual_{c.role}",
                     source=self.name,
-                    metadata={"shape": c.role},
+                    metadata={
+                        "shape": c.role,
+                        "semantic_match": semantic_match,
+                        "is_contour_fallback": True,
+                    },
                 )
             )
 
@@ -283,3 +303,12 @@ class InstructionGrounder:
         # Sort by confidence descending
         valid_candidates.sort(key=lambda x: x.confidence, reverse=True)
         return valid_candidates
+
+
+def get_default_grounder() -> InstructionGrounder:
+    """Return the persistent, process-wide cached InstructionGrounder instance."""
+    global _default_grounder
+    with _grounder_lock:
+        if _default_grounder is None:
+            _default_grounder = InstructionGrounder()
+        return _default_grounder

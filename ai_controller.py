@@ -50,12 +50,35 @@ except ImportError:
         ContextAnalyzer = None
         ContextReport = None
 
+try:
+    from action_expectations import ActionExpectation, ActionIntent, ActionRiskLevel, ActionState
+    from action_verifier import ActionVerifier, VerificationEvidence, VerificationStatus
+    from action_recovery import ActionRecoveryDecider, RecoveryDecision, RecoveryStrategy
+except ImportError:
+    try:
+        from .action_expectations import ActionExpectation, ActionIntent, ActionRiskLevel, ActionState
+        from .action_verifier import ActionVerifier, VerificationEvidence, VerificationStatus
+        from .action_recovery import ActionRecoveryDecider, RecoveryDecision, RecoveryStrategy
+    except ImportError:
+        ActionExpectation = None
+        ActionIntent = None
+        ActionRiskLevel = None
+        ActionState = None
+        ActionVerifier = None
+        VerificationEvidence = None
+        VerificationStatus = None
+        ActionRecoveryDecider = None
+        RecoveryDecision = None
+        RecoveryStrategy = None
+
 
 class DesktopAgentController:
     """Perceive and operate the user's actual desktop through Eyes, Context, and AgentHands."""
 
     def __init__(self):
         self.context = ContextAnalyzer() if ContextAnalyzer else None
+        self.verifier = ActionVerifier() if ActionVerifier else None
+        self.recovery_decider = ActionRecoveryDecider() if ActionRecoveryDecider else None
 
     @contextmanager
     def task(self, task_name: str = "desktop_task"):
@@ -223,6 +246,94 @@ class DesktopAgentController:
             "utterance": report.utterance,
             "action_result": action_result,
             "executed": execute,
+        }
+
+    # ── Action Verification & Recovery Pipeline ───────────────────────────
+    def execute_verified_action(
+        self,
+        intent: Any,
+        pre_observation: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Execute an action and verify its outcome using fresh UI evidence.
+        Workflow: PREPARED -> OBSERVE (pre) -> DISPATCH -> OBSERVE (post) -> VERIFY -> RECOVERY.
+        """
+        if self.verifier is None:
+            raise RuntimeError("ActionVerifier is not available.")
+
+        pre_obs = pre_observation if pre_observation is not None else self.observe(annotate=False)
+        if hasattr(intent, "state"):
+            intent.state = ActionState.DISPATCHED
+
+        dispatch_result: Dict[str, Any] = {"success": False}
+        act_type = getattr(intent, "action_type", "")
+        params = getattr(intent, "parameters", {}) or {}
+
+        try:
+            if act_type == "click_element" and getattr(intent, "target_id", None) is not None:
+                dispatch_result = self.click_element(
+                    intent.target_id,
+                    button=params.get("button", "left"),
+                    clicks=params.get("clicks", 1),
+                )
+            elif act_type == "click_coords":
+                dispatch_result = self.click(
+                    x=params.get("x"),
+                    y=params.get("y"),
+                    button=params.get("button", "left"),
+                    clicks=params.get("clicks", 1),
+                )
+            elif act_type == "type_text":
+                dispatch_result = self.type_text(
+                    text=params.get("text", ""),
+                    profile=params.get("profile", "natural"),
+                )
+            elif act_type == "press_key":
+                self.press_key(params.get("key", "enter"))
+                dispatch_result = {"success": True, "action": "press_key", "key": params.get("key", "enter")}
+            elif act_type == "hotkey":
+                keys = params.get("keys", [])
+                self.hotkey(*keys)
+                dispatch_result = {"success": True, "action": "hotkey", "keys": keys}
+            elif act_type == "focus_window":
+                win_target = params.get("title") or getattr(intent, "target_query", None)
+                ok = self.focus(win_target)
+                dispatch_result = {"success": ok, "action": "focus_window", "title": win_target}
+            elif act_type == "scroll":
+                dispatch_result = self.scroll(
+                    clicks=params.get("clicks", -3),
+                    x=params.get("x"),
+                    y=params.get("y"),
+                )
+            else:
+                dispatch_result = {"success": False, "error": f"Unknown action type: {act_type}"}
+        except Exception as ex:
+            dispatch_result = {"success": False, "error": str(ex)}
+
+        # Small physical stabilization pause
+        time.sleep(0.3)
+
+        # Fresh post-action observation
+        post_obs = self.observe(annotate=False)
+
+        # Verify outcome against fresh evidence
+        evidence = self.verifier.verify(intent, pre_obs, dispatch_result, post_obs)
+
+        recovery_decision = None
+        if evidence.status != VerificationStatus.CONFIRMED and self.recovery_decider:
+            recovery_decision = self.recovery_decider.decide(
+                intent,
+                evidence,
+                pre_obs=pre_obs,
+                post_obs=post_obs,
+            )
+
+        return {
+            "success": evidence.status == VerificationStatus.CONFIRMED,
+            "intent": intent.to_dict() if hasattr(intent, "to_dict") else str(intent),
+            "dispatch_result": dispatch_result,
+            "verification": evidence.to_dict(),
+            "recovery_decision": recovery_decision.to_dict() if recovery_decision else None,
         }
 
 
