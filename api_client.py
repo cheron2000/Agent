@@ -86,6 +86,36 @@ class DesktopAgentClient:
     def end_task(self) -> Dict[str, Any]:
         return self._post("/eyes/task/end")
 
+    def observe(
+        self,
+        save_annotated: bool = True,
+        max_elements: int = 100,
+        annotate: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Fetch unified observation with numbered UI elements for LLM grounding."""
+        if annotate is not None:
+            save_annotated = annotate
+        return self._post("/eyes/observe", {"save_annotated": save_annotated, "max_elements": max_elements})
+
+    def zoom(
+        self,
+        region: Optional[List[int]] = None,
+        element_id: Optional[int] = None,
+        scale: float = 3.0,
+    ) -> Dict[str, Any]:
+        """Zoom into a region or element ID with high-resolution OCR."""
+        payload: Dict[str, Any] = {"scale": scale}
+        if region is not None:
+            payload["region"] = region
+        if element_id is not None:
+            payload["element_id"] = element_id
+        return self._post("/eyes/zoom", payload)
+
+    def wait_for(self, target: str, timeout_s: float = 5.0) -> Dict[str, Any]:
+        """Poll the desktop until target text appears."""
+        return self._post("/eyes/wait", {"target": target, "timeout_s": timeout_s})
+
+
     # ── Physical Desktop Actions ─────────────────────────────────────────────
     def windows(self, include_windows: bool = True) -> Dict[str, Any]:
         return self._get("/hands/status", params={"include_windows": include_windows})
@@ -108,6 +138,16 @@ class DesktopAgentClient:
             payload["x"] = x
             payload["y"] = y
         return self._post("/hands/click", payload)
+
+    def click_element(
+        self,
+        element_id: int,
+        button: Literal["left", "right", "middle"] = "left",
+        clicks: int = 1,
+    ) -> Dict[str, Any]:
+        """Click an element by its observation ID."""
+        return self._post("/hands/click_element", {"element_id": element_id, "button": button, "clicks": clicks})
+
 
     def scroll(self, clicks: int, x: Optional[int] = None, y: Optional[int] = None) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"clicks": clicks}

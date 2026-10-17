@@ -44,3 +44,31 @@ def test_client_task_context_manager():
 
         mock_start.assert_called_once_with("automated_job")
         mock_end.assert_called_once()
+
+
+def test_client_observe():
+    client = DesktopAgentClient(base_url="http://127.0.0.1:8765", auth_token="tok")
+    with patch.object(client.session, "post") as mock_post:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"success": True, "observation_id": "obs_1"}
+        mock_post.return_value = mock_resp
+
+        res = client.observe(save_annotated=True, max_elements=50)
+        assert res["observation_id"] == "obs_1"
+        call_url = mock_post.call_args[0][0]
+        assert call_url.endswith("/eyes/observe")
+
+
+def test_client_click_element():
+    client = DesktopAgentClient(base_url="http://127.0.0.1:8765", auth_token="tok")
+    with patch.object(client.session, "post") as mock_post:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"success": True}
+        mock_post.return_value = mock_resp
+
+        client.click_element(3, button="middle")
+        call_url = mock_post.call_args[0][0]
+        call_json = mock_post.call_args[1]["json"]
+        assert call_url.endswith("/hands/click_element")
+        assert call_json == {"element_id": 3, "button": "middle", "clicks": 1}
+

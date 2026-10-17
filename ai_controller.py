@@ -69,11 +69,49 @@ class DesktopAgentController:
     def describe(self, prompt: Optional[str] = None) -> Dict[str, Any]:
         return eyes.describe(prompt=prompt)
 
+    def observe(
+        self,
+        save_annotated: bool = True,
+        max_elements: int = 100,
+        annotate: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Capture unified observation with numbered UI elements for LLM grounding."""
+        if annotate is not None:
+            save_annotated = annotate
+        return eyes.observe(save_annotated=save_annotated, max_elements=max_elements)
+
+    def zoom(
+        self,
+        region: Optional[List[int]] = None,
+        element_id: Optional[int] = None,
+        scale: float = 3.0,
+    ) -> Dict[str, Any]:
+        """Crop and zoom into a bounding box or element ID with high-resolution OCR."""
+        return eyes.zoom(region=region, element_id=element_id, scale=scale)
+
+    def wait_for_text(self, target: str, timeout_s: float = 5.0) -> Dict[str, Any]:
+        """Wait until target text appears on screen."""
+        return eyes.wait_for_text(target=target, timeout_s=timeout_s)
+
+    def click_element(
+        self,
+        element_id: int,
+        button: str = "left",
+        clicks: int = 1,
+    ) -> Dict[str, Any]:
+        """Click an element by its observation ID without computing pixel coordinates."""
+        coords = eyes.resolve_element_center(element_id)
+        if not coords:
+            return {"success": False, "error": f"Element ID {element_id} not found in active observation"}
+        cx, cy = coords
+        return click(x=cx, y=cy, button=button, clicks=clicks)
+
     def windows(self) -> Dict[str, Any]:
         return {
             "active_window": get_active_window_title(),
             "windows": list_windows(),
         }
+
 
     # Real desktop input
     def focus(self, window_title: str) -> bool:

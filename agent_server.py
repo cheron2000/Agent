@@ -227,6 +227,29 @@ class FocusRequest(BaseModel):
     window_title: str = Field(min_length=1)
 
 
+class ObserveRequest(BaseModel):
+    save_annotated: bool = True
+    max_elements: int = Field(default=100, ge=1, le=300)
+
+
+class ZoomRequest(BaseModel):
+    region: Optional[List[int]] = None
+    element_id: Optional[int] = None
+    scale: float = Field(default=3.0, ge=1.0, le=5.0)
+
+
+class WaitRequest(BaseModel):
+    target: str = Field(min_length=1)
+    timeout_s: float = Field(default=5.0, ge=0.5, le=30.0)
+
+
+class ClickElementRequest(BaseModel):
+    element_id: int = Field(ge=1)
+    button: Literal["left", "right", "middle"] = "left"
+    clicks: int = Field(default=1, ge=1, le=3)
+
+
+
 # ── Routes: Health & Perception (Eyes) ───────────────────────────────────────
 @app.get("/health")
 def health() -> Dict[str, str]:
@@ -290,6 +313,25 @@ def end_task(_: str = Depends(verify_auth)) -> Dict[str, Any]:
     with _eyes_lock:
         deleted = eyes.end_task()
         return {"success": True, "deleted_screenshots": deleted}
+
+
+@app.post("/eyes/observe")
+def eyes_observe(req: ObserveRequest, _: str = Depends(verify_auth)) -> Dict[str, Any]:
+    with _eyes_lock:
+        return eyes.observe(save_annotated=req.save_annotated, max_elements=req.max_elements)
+
+
+@app.post("/eyes/zoom")
+def eyes_zoom(req: ZoomRequest, _: str = Depends(verify_auth)) -> Dict[str, Any]:
+    with _eyes_lock:
+        return eyes.zoom(region=req.region, element_id=req.element_id, scale=req.scale)
+
+
+@app.post("/eyes/wait")
+def eyes_wait(req: WaitRequest, _: str = Depends(verify_auth)) -> Dict[str, Any]:
+    with _eyes_lock:
+        return eyes.wait_for_text(target=req.target, timeout_s=req.timeout_s)
+
 
 
 # ── Routes: Physical Input (AgentHands) ──────────────────────────────────────
@@ -362,6 +404,20 @@ def hands_paste(req: PasteRequest, _: str = Depends(verify_auth)) -> Dict[str, A
             "characters": len(req.text),
             "clipboard_restored": req.restore_clipboard,
         }
+
+
+@app.post("/hands/click_element")
+def hands_click_element(req: ClickElementRequest, _: str = Depends(verify_auth)) -> Dict[str, Any]:
+    with _hands_lock:
+        coords = eyes.resolve_element_center(req.element_id)
+        if not coords:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Element ID {req.element_id} not found in current observation. Please call /eyes/observe first.",
+            )
+        cx, cy = coords
+        return hands_mouse.click(x=cx, y=cy, button=req.button, clicks=req.clicks)
+
 
 
 def run_server(port: int = SERVER_PORT) -> None:

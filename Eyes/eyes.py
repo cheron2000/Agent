@@ -25,6 +25,17 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Union, List, Tuple
 from contextlib import contextmanager
 
+try:
+    from .coords import box_center, get_screen_size
+    from .diffing import has_screen_changed, wait_until
+    from .observe import build_observation
+    from .schema import Observation, UIElement, get_current_observation, resolve_element
+except ImportError:
+    from coords import box_center, get_screen_size
+    from diffing import has_screen_changed, wait_until
+    from observe import build_observation
+    from schema import Observation, UIElement, get_current_observation, resolve_element
+
 # ── Enable High-DPI Awareness on Windows ─────────────────────────────────────
 if sys.platform == "win32":
     try:
@@ -797,8 +808,130 @@ def get_screen_info() -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. STANDALONE CLI INTERFACE
+# 6. UNIFIED OBSERVATION & ELEMENT RESOLUTION PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
+
+def observe(save_annotated: bool = True, max_elements: int = 100) -> Dict[str, Any]:
+    """Capture screen and build a unified observation with numbered UI elements.
+    
+    Synthesizes Windows UI Automation, tuned OCR, and computer vision cues.
+    All elements are assigned sequential IDs for deterministic grounding.
+    """
+    try:
+        active_region = _ACTIVE_CANVAS_REGION
+        screenshot = _grab_screen(region=active_region)
+        active_win = ""
+        try:
+            import win32gui
+            hwnd = win32gui.GetForegroundWindow()
+            if hwnd and win32gui.IsWindow(hwnd):
+                active_win = win32gui.GetWindowText(hwnd).strip()
+        except Exception:
+            pass
+
+        obs = build_observation(
+            screen_image=screenshot,
+            active_window_title=active_win or "Active Desktop",
+            save_annotated=save_annotated,
+            screenshots_dir=str(SHOTS_DIR),
+            max_elements=max_elements,
+        )
+
+        global _ACTIVE_TASK_SESSION
+        if _ACTIVE_TASK_SESSION:
+            if obs.image_path:
+                _ACTIVE_TASK_SESSION.add_screenshot(obs.image_path)
+            if obs.annotated_image_path:
+                _ACTIVE_TASK_SESSION.add_screenshot(obs.annotated_image_path)
+
+        res = obs.to_dict()
+        res["success"] = True
+        return res
+    except Exception as e:
+        return {"success": False, "error": str(e), "elements": []}
+
+
+def zoom(
+    region: Optional[List[int]] = None,
+    element_id: Optional[int] = None,
+    scale: float = 3.0,
+) -> Dict[str, Any]:
+    """Crop and zoom into a bounding box or element ID with high-resolution OCR."""
+    box = region
+    if element_id is not None:
+        el = resolve_element(element_id)
+        if el:
+            box = el.box
+        else:
+            return {"success": False, "error": f"Element ID {element_id} not found in current observation"}
+
+    if not box:
+        return {"success": False, "error": "Either region [x1, y1, x2, y2] or element_id must be provided"}
+
+    x1, y1, x2, y2 = box
+    w = max(1, x2 - x1)
+    h = max(1, y2 - y1)
+    crop_region = (x1, y1, w, h)
+
+    cropped = _grab_screen(region=crop_region)
+    try:
+        from .ocr import extract_ocr_elements
+    except ImportError:
+        from ocr import extract_ocr_elements
+
+    elements = extract_ocr_elements(cropped, scale=scale, offset=(x1, y1))
+
+    pyautogui, pytesseract, _, _, _, _ = _get_deps()
+    tess = _find_tesseract()
+    if tess:
+        pytesseract.pytesseract.tesseract_cmd = tess
+    text = pytesseract.image_to_string(cropped).strip()
+
+    return {
+        "success": True,
+        "region": box,
+        "text": text,
+        "elements": [el.to_dict() for el in elements],
+    }
+
+
+def wait_for_text(target: str, timeout_s: float = 5.0) -> Dict[str, Any]:
+    """Poll the screen until target text appears, returning the matched element."""
+    found_element = None
+    target_lower = target.strip().lower()
+
+    def check():
+        nonlocal found_element
+        obs_dict = observe(save_annotated=False)
+        if not obs_dict.get("success"):
+            return False
+        for el in obs_dict.get("elements", []):
+            if target_lower in el.get("name", "").lower():
+                found_element = el
+                return True
+        return False
+
+    success = wait_until(check, timeout_s=timeout_s, poll_interval_s=0.25)
+    return {
+        "success": success,
+        "target": target,
+        "element": found_element,
+        "timed_out": not success,
+    }
+
+
+def resolve_element_center(element_id: int) -> Optional[Tuple[int, int]]:
+    """Resolve element ID to physical center coordinates (cx, cy) from current observation."""
+    el = resolve_element(element_id)
+    if el:
+        return el.center
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. STANDALONE CLI INTERFACE
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 def main():
     import argparse

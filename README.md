@@ -44,6 +44,30 @@ Install the Tesseract OCR executable separately and ensure it is available on `P
 
 ## Use from Python
 
+### Grounded Element-by-ID (Recommended)
+
+Eliminate coordinate guesswork by asking the vision pipeline to detect and number UI elements:
+
+```python
+from ai_controller import DesktopAgentController
+
+desktop = DesktopAgentController()
+
+with desktop.task("open_and_save"):
+    # 1. Observe screen: captures UIA tree + tuned OCR + Set-of-Marks visual overlay
+    obs = desktop.observe()
+    print(f"Active window: {obs['active_window']}, found {len(obs['elements'])} elements")
+    
+    # 2. Click element directly by its numeric ID (hands resolves center coordinates)
+    # Target can be chosen by LLM inspecting obs["elements"] or obs["image"]
+    for el in obs["elements"]:
+        if "Save" in el["name"]:
+            desktop.click_element(el["id"])
+            break
+```
+
+### Direct Coordinate & OCR Lookup
+
 ```python
 from ai_controller import DesktopAgentController
 
@@ -84,24 +108,32 @@ from api_client import DesktopAgentClient
 client = DesktopAgentClient()
 
 with client.task("automated_task"):
-    info = client.screen_info()
-    client.click(500, 300)
+    # Element-by-ID observation
+    obs = client.observe(annotate=True)
+    if obs["elements"]:
+        client.click_element(obs["elements"][0]["id"])
+    
+    # Direct input
     client.type_text("Hello desktop", profile="natural")
 ```
 
 ## Capabilities
 
-| Need | Method |
-| --- | --- |
-| Inspect screen size and cursor | `screen_info()` |
-| Capture the actual desktop | `capture()` |
-| OCR visible text | `transcribe(detailed=True)` |
-| Find visible text | `find("Save")` |
-| Describe screen visually | `describe()` |
-| List/focus applications | `windows()`, `focus("Notepad")` |
-| Move/click the real mouse | `move()`, `click()` |
-| Scroll current app | `scroll()` |
-| Send keyboard input | `type_text()`, `paste_text()`, `press_key()` |
+| Need | Method | Description |
+| --- | --- | --- |
+| Grounded UI Observation | `observe(annotate=True)` | Hybrid UIA + tuned OCR + CV detection with Set-of-Marks visual badges |
+| Click UI Element by ID | `click_element(id)` | Resolves element ID from last observation to physical center coordinates |
+| Zoom & Re-OCR Crop | `zoom(box_or_region, scale=3)` | High-resolution cropped observation for small buttons or blurry text |
+| Wait for UI Text / State | `wait_for_text(text, timeout=10)` | Polling synchronization loop with screen change diffing |
+| Inspect screen size & cursor | `screen_info()` | Screen width, height, and current mouse pointer coordinates |
+| Capture desktop screenshot | `capture()` | Raw desktop screenshot saved to disk |
+| OCR visible text | `transcribe(detailed=True)` | Full screen or cropped region text extraction via Tesseract |
+| Find visible text | `find("Save")` | Find specific text box and center coordinates |
+| Describe screen visually | `describe()` | Vision model / structured description of visible applications |
+| List/focus applications | `windows()`, `focus("Notepad")` | Enumerate active windows and bring targeted window to foreground |
+| Move/click physical mouse | `move()`, `click()` | Real mouse clicks with profile curves and modifiers |
+| Scroll current app | `scroll()` | Send physical vertical/horizontal scroll events |
+| Send keyboard input | `type_text()`, `paste_text()`, `press_key()` | Physical typing, clipboard paste, and hotkey chords |
 
 ## Screenshot Cleanup
 

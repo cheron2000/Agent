@@ -172,3 +172,55 @@ def test_task_lifecycle(client, auth_headers):
         end_resp = client.post("/eyes/task/end", headers=auth_headers)
         assert end_resp.status_code == 200
         assert end_resp.json()["deleted_screenshots"] == 3
+
+
+# ── Observation & Element Grounding Endpoints ────────────────────────────────
+def test_observe_endpoint(client, auth_headers):
+    """POST /eyes/observe returns structured observation dictionary."""
+    mock_obs = {
+        "success": True,
+        "observation_id": "obs_123",
+        "elements": [{"id": 1, "role": "Button", "name": "Submit", "box": [10, 10, 50, 50]}],
+    }
+    with patch("agent_server.eyes.observe", return_value=mock_obs):
+        resp = client.post("/eyes/observe", json={"save_annotated": True, "max_elements": 50}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["observation_id"] == "obs_123"
+        assert len(resp.json()["elements"]) == 1
+
+
+def test_zoom_endpoint(client, auth_headers):
+    """POST /eyes/zoom crops and performs zoomed OCR."""
+    mock_zoom = {"success": True, "region": [10, 10, 50, 50], "text": "Zoomed Text"}
+    with patch("agent_server.eyes.zoom", return_value=mock_zoom):
+        resp = client.post("/eyes/zoom", json={"element_id": 1, "scale": 3.0}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["text"] == "Zoomed Text"
+
+
+def test_wait_endpoint(client, auth_headers):
+    """POST /eyes/wait polls until target appears."""
+    mock_wait = {"success": True, "target": "Save", "element": {"id": 1, "name": "Save"}}
+    with patch("agent_server.eyes.wait_for_text", return_value=mock_wait):
+        resp = client.post("/eyes/wait", json={"target": "Save", "timeout_s": 2.0}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+
+def test_click_element_resolved(client, auth_headers):
+    """POST /hands/click_element resolves center coords and clicks."""
+    with patch("agent_server.eyes.resolve_element_center", return_value=(250, 350)), \
+         patch("agent_server.hands_mouse.click", return_value={"success": True}) as mock_click:
+
+        resp = client.post("/hands/click_element", json={"element_id": 5, "button": "left"}, headers=auth_headers)
+        assert resp.status_code == 200
+        mock_click.assert_called_once_with(x=250, y=350, button="left", clicks=1)
+
+
+def test_click_element_not_found(client, auth_headers):
+    """POST /hands/click_element returns 404 when element ID does not exist."""
+    with patch("agent_server.eyes.resolve_element_center", return_value=None):
+        resp = client.post("/hands/click_element", json={"element_id": 999}, headers=auth_headers)
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"].lower()
+

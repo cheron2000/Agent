@@ -198,6 +198,8 @@ class AtomicStepExecutor:
 
 ## 5. Summary of Best Practices
 
-1. **Keep Decision Boundaries Explicit**: Combine deterministic actions only when they share a known target and no intermediate decision is required. For example, filling a known address bar and pressing Enter can be one action sequence, followed by navigation verification. Split actions when the next target depends on the preceding state.
-2. **Dynamic Offset Awareness**: Recognize that error banners, dropdown menus, and responsive layouts can shift coordinates (e.g. login boxes shifting downwards by 65px when an error message appears). Always verify bounding boxes when coordinates change.
-3. **Graceful Recovery**: When a step fails confirmation, do not blindly repeat the exact same broken input. Inspect the screenshot to see if a tooltip, passkey popup, or dialogue blocked the target, dismiss it with `Escape`, and re-attempt.
+1. **Observe, Then Act by ID**: Never force the LLM to hallucinate pixel coordinates. Call `observe()` before acting, refer to targets by their numbered `id`, and call `click_element(id)` to let the system resolve the exact geometric center reliably.
+2. **Keep Decision Boundaries Explicit**: Combine deterministic actions only when they share a known target and no intermediate decision is required. For example, filling a known address bar and pressing Enter can be one action sequence, followed by navigation verification. Split actions when the next target depends on the preceding state.
+3. **Dynamic Offset Awareness**: Recognize that error banners, dropdown menus, and responsive layouts can shift coordinates. Using UI Automation and element IDs eliminates coordinate drift across resolution and layout changes.
+4. **Graceful Recovery**: When a step fails confirmation, do not blindly repeat the exact same broken input. Re-observe to inspect if a tooltip, passkey popup, or dialogue blocked the target, dismiss it with `Escape`, and re-attempt.
+

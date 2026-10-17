@@ -21,15 +21,52 @@ flowchart TD
 
 | Component | Role |
 | --- | --- |
-| `ai_controller.py` | `DesktopAgentController`: direct high-level façade for perception, window inspection, mouse, keyboard, and task screenshot cleanup. |
+| `ai_controller.py` | `DesktopAgentController`: direct high-level façade for perception (`observe`, `zoom`, `wait_for_text`), window inspection, mouse, keyboard, and task screenshot cleanup. |
 | `agent_server.py` | Loopback-only authenticated FastAPI service exposing direct `/eyes/*` and `/hands/*` operations with Bearer auth, DNS rebinding protection, and input concurrency locks. |
 | `api_client.py` | Python client for `agent_server.py` with automatic bearer token discovery and task session context manager. |
-| `Eyes/eyes.py` | Screen capture, OCR, text lookup, screen map, visual descriptions, screenshot lifecycle, and lower-level input helpers. |
-| `Eyes/eyes_server.py` | Optional FastAPI wrapper for Eyes on port 8421. |
-| `Eyes/eyes_mcp.py` | Optional MCP server for Eyes over stdio. |
+| `Eyes/eyes.py` | Primary perception façade delegating to modular perception subsystems; manages screenshot lifecycles and caches. |
+| `Eyes/coords.py` | Per-monitor DPI awareness initialization, bounding box math, coordinate clamping, and IoU computation. |
+| `Eyes/schema.py` | Standardized `UIElement` and `Observation` dataclasses with element caching and ID-to-point coordinate resolution. |
+| `Eyes/uia.py` | Windows UI Automation provider via `pywinauto` / `uiautomation` with foreground traversal budget and attribute safety. |
+| `Eyes/ocr.py` | Tuned OCR engine with dark-theme background inversion, cubic upscale, sparse PSM mode, and phrase grouping. |
+| `Eyes/cv_detect.py` | Computer vision fallback for custom-drawn buttons via Canny edge / contour detection and template matching. |
+| `Eyes/annotate.py` | Set-of-Marks visual overlay rendering (numbered badges sorted large-box first), labeled A1-L8 grid, and spatial text layouts. |
+| `Eyes/diffing.py` | Grayscale downscaled frame diffing for screen change detection and adaptive polling synchronization. |
+| `Eyes/observe.py` | Multi-source observation pipeline uniting UIA, OCR, and CV with IoU deduplication and natural reading-order sorting. |
 | `Hands/agent_hands` | PyAutoGUI/Win32 mouse, keyboard, typing simulation, window management, and MCP utilities. |
-| `Hands/agent_hands/server.py` | Optional AgentHands MCP server over stdio. |
 | `tools.json` | Registry for Windows utility scripts. |
+
+## Element-Based Grounding Pipeline
+
+Instead of forcing LLMs to guess pixel coordinates from raw screenshots, the agent uses a structured grounding pattern:
+
+```text
+Desktop Screen
+      │
+      ├────────────────────────┬────────────────────────┐
+      ▼                        ▼                        ▼
+Windows UIA Tree           Tuned OCR               CV Contours
+(Roles, Names, States)  (Dark Inverted, Lines)   (Custom Buttons)
+      │                        │                        │
+      └────────────────────────┼────────────────────────┘
+                               ▼
+                   observe.py (Merge & Dedupe)
+                  • IoU Deduplication (IoU > 0.4)
+                  • Reading Order Sort (Y-band, X)
+                  • Sequential ID Assignment
+                               │
+            ┌──────────────────┴──────────────────┐
+            ▼                                     ▼
+Observation Metadata                     Set-of-Marks Image
+{ id: 12, role: "Button", name: "Save" }   [12] [Save]
+            │                                     │
+            └──────────────────┬──────────────────┘
+                               ▼
+                        Consuming LLM
+                     Selects Element ID
+                               ▼
+                 Hands: click_element(id)
+```
 
 ## Task lifecycle
 
