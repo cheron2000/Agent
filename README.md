@@ -12,6 +12,9 @@ An agent operates the actual desktop you are using:
 - **`ai_controller.py`** combines both into one Python interface for an agent.
 - **`agent_server.py`** and **`api_client.py`** expose the same direct-desktop capabilities over an authenticated localhost REST API.
 
+> [!TIP]
+> **New AI Agent?** Read **[AGENTS.md](AGENTS.md)** first! It details the core **Observe → Reason → Act → Verify** loop, how to use `DesktopAgentController` without editing any code, and how to execute tasks using the Atomic Step Task Planner.
+
 ## Architecture
 
 ```text
