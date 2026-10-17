@@ -106,6 +106,10 @@ class DesktopAgentController:
         cx, cy = coords
         return click(x=cx, y=cy, button=button, clicks=clicks)
 
+    def resolve_element_center(self, element_id: int) -> Optional[Tuple[int, int]]:
+        """Resolve element ID to physical screen center coordinates (cx, cy)."""
+        return eyes.resolve_element_center(element_id)
+
     def windows(self) -> Dict[str, Any]:
         return {
             "active_window": get_active_window_title(),
