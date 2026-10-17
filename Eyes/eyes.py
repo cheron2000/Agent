@@ -20,6 +20,7 @@ import io
 import time
 import shutil
 import ctypes
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, Union, List, Tuple
@@ -36,7 +37,7 @@ except ImportError:
     from observe import build_observation
     from schema import Observation, UIElement, get_current_observation, resolve_element
 
-# ── Enable High-DPI Awareness on Windows ─────────────────────────────────────
+# â”€â”€ Enable High-DPI Awareness on Windows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 if sys.platform == "win32":
     try:
         # 2 = PROCESS_PER_MONITOR_DPI_AWARE
@@ -47,7 +48,7 @@ if sys.platform == "win32":
         except Exception:
             pass
 
-# ── Paths & Configuration ───────────────────────────────────────────────────
+# â”€â”€ Paths & Configuration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 EYES_DIR = Path(__file__).parent.resolve()
 SHOTS_DIR = EYES_DIR / "screenshots"
 SHOTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -62,9 +63,10 @@ TESSERACT_PATHS = [
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 VISION_MODEL = os.getenv("VISION_MODEL", "llava:7b")
 
-# ── Canvas Bounding & Ephemeral Lifecycle ────────────────────────────────────
+# â”€â”€ Canvas Bounding & Ephemeral Lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _ACTIVE_CANVAS_REGION: Optional[Tuple[int, int, int, int]] = None
 _ACTIVE_TASK_SESSION: Optional["TaskSession"] = None
+_SESSION_LOCK = threading.Lock()
 
 
 class TaskSession:
@@ -75,54 +77,63 @@ class TaskSession:
         self.screenshots: List[str] = []
         self.is_active = True
         self.started_at = time.time()
+        self._lock = threading.Lock()
 
     def add_screenshot(self, path: str):
-        if path and path not in self.screenshots:
-            self.screenshots.append(path)
+        if not path:
+            return
+        with self._lock:
+            if path not in self.screenshots:
+                self.screenshots.append(path)
 
     def cleanup(self) -> int:
         """Purge all temporary screenshots created during this task execution."""
-        deleted_count = 0
-        for path in list(self.screenshots):
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-                    deleted_count += 1
-            except Exception:
-                pass
-        self.screenshots.clear()
-        self.is_active = False
-        return deleted_count
+        with self._lock:
+            deleted_count = 0
+            for path in list(self.screenshots):
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                        deleted_count += 1
+                except Exception:
+                    pass
+            self.screenshots.clear()
+            self.is_active = False
+            return deleted_count
 
 
 def set_canvas_region(region: Optional[Tuple[int, int, int, int]]):
     """Set the active canvas bounding box (x, y, width, height) to restrict all Eyes operations strictly inside it."""
     global _ACTIVE_CANVAS_REGION
-    _ACTIVE_CANVAS_REGION = region
+    with _SESSION_LOCK:
+        _ACTIVE_CANVAS_REGION = region
 
 
 def get_canvas_region() -> Optional[Tuple[int, int, int, int]]:
     """Get the currently active canvas bounding box, if any."""
-    return _ACTIVE_CANVAS_REGION
+    with _SESSION_LOCK:
+        return _ACTIVE_CANVAS_REGION
 
 
 def start_task(task_name: str = "task") -> TaskSession:
     """Start an ephemeral task session. All screenshots created during this task are deleted upon end_task()."""
     global _ACTIVE_TASK_SESSION
-    if _ACTIVE_TASK_SESSION:
-        _ACTIVE_TASK_SESSION.cleanup()
-    _ACTIVE_TASK_SESSION = TaskSession(task_name)
-    return _ACTIVE_TASK_SESSION
+    with _SESSION_LOCK:
+        if _ACTIVE_TASK_SESSION:
+            _ACTIVE_TASK_SESSION.cleanup()
+        _ACTIVE_TASK_SESSION = TaskSession(task_name)
+        return _ACTIVE_TASK_SESSION
 
 
 def end_task() -> int:
     """End the current task session and delete all screenshots created during it."""
     global _ACTIVE_TASK_SESSION
-    if _ACTIVE_TASK_SESSION:
-        deleted = _ACTIVE_TASK_SESSION.cleanup()
-        _ACTIVE_TASK_SESSION = None
-        return deleted
-    return 0
+    with _SESSION_LOCK:
+        if _ACTIVE_TASK_SESSION:
+            deleted = _ACTIVE_TASK_SESSION.cleanup()
+            _ACTIVE_TASK_SESSION = None
+            return deleted
+        return 0
 
 
 @contextmanager
@@ -135,7 +146,7 @@ def task_session(task_name: str = "task"):
         end_task()
 
 
-# ── Tesseract Path Detection ─────────────────────────────────────────────────
+# â”€â”€ Tesseract Path Detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _find_tesseract() -> Optional[str]:
     for p in TESSERACT_PATHS:
         if os.path.exists(p):
@@ -144,7 +155,7 @@ def _find_tesseract() -> Optional[str]:
     return found
 
 
-# ── Lazy Dependency Loader ───────────────────────────────────────────────────
+# â”€â”€ Lazy Dependency Loader â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _get_deps():
     try:
         import pyautogui
@@ -155,7 +166,7 @@ def _get_deps():
         import requests
 
         # PyAutoGUI fail-safe settings
-        pyautogui.FAILSAFE = False
+        pyautogui.FAILSAFE = True
         pyautogui.PAUSE = 0.1
 
         tess = _find_tesseract()
@@ -217,44 +228,65 @@ def _win32_gdi_grab(region: Optional[Tuple[int, int, int, int]] = None):
         x, y, w, h = 0, 0, full_w, full_h
 
     hdc = user32.GetDC(0)
-    memdc = gdi32.CreateCompatibleDC(hdc)
-    bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
-    gdi32.SelectObject(memdc, bmp)
+    memdc = None
+    bmp = None
+    old_bmp = None
+    try:
+        memdc = gdi32.CreateCompatibleDC(hdc)
+        bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
+        old_bmp = gdi32.SelectObject(memdc, bmp)
 
-    # 0x00CC0020 is SRCCOPY
-    gdi32.BitBlt(memdc, 0, 0, w, h, hdc, x, y, 0x00CC0020)
+        # 0x00CC0020 is SRCCOPY
+        gdi32.BitBlt(memdc, 0, 0, w, h, hdc, x, y, 0x00CC0020)
 
-    class BITMAPINFOHEADER(ctypes.Structure):
-        _fields_ = [
-            ("biSize", wintypes.DWORD),
-            ("biWidth", wintypes.LONG),
-            ("biHeight", wintypes.LONG),
-            ("biPlanes", wintypes.WORD),
-            ("biBitCount", wintypes.WORD),
-            ("biCompression", wintypes.DWORD),
-            ("biSizeImage", wintypes.DWORD),
-            ("biXPelsPerMeter", wintypes.LONG),
-            ("biYPelsPerMeter", wintypes.LONG),
-            ("biClrUsed", wintypes.DWORD),
-            ("biClrImportant", wintypes.DWORD),
-        ]
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ("biSize", wintypes.DWORD),
+                ("biWidth", wintypes.LONG),
+                ("biHeight", wintypes.LONG),
+                ("biPlanes", wintypes.WORD),
+                ("biBitCount", wintypes.WORD),
+                ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD),
+                ("biXPelsPerMeter", wintypes.LONG),
+                ("biYPelsPerMeter", wintypes.LONG),
+                ("biClrUsed", wintypes.DWORD),
+                ("biClrImportant", wintypes.DWORD),
+            ]
 
-    bmi = BITMAPINFOHEADER()
-    bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-    bmi.biWidth = w
-    bmi.biHeight = -h  # top-down DIB
-    bmi.biPlanes = 1
-    bmi.biBitCount = 32
-    bmi.biCompression = 0
+        bmi = BITMAPINFOHEADER()
+        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.biWidth = w
+        bmi.biHeight = -h  # top-down DIB
+        bmi.biPlanes = 1
+        bmi.biBitCount = 32
+        bmi.biCompression = 0
 
-    buf = ctypes.create_string_buffer(w * h * 4)
-    gdi32.GetDIBits(memdc, bmp, 0, h, buf, ctypes.byref(bmi), 0)
-    img = Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB")
-
-    gdi32.DeleteObject(bmp)
-    gdi32.DeleteDC(memdc)
-    user32.ReleaseDC(0, hdc)
-    return img
+        buf = ctypes.create_string_buffer(w * h * 4)
+        gdi32.GetDIBits(memdc, bmp, 0, h, buf, ctypes.byref(bmi), 0)
+        img = Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB")
+        return img
+    finally:
+        if memdc and old_bmp:
+            try:
+                gdi32.SelectObject(memdc, old_bmp)
+            except Exception:
+                pass
+        if bmp:
+            try:
+                gdi32.DeleteObject(bmp)
+            except Exception:
+                pass
+        if memdc:
+            try:
+                gdi32.DeleteDC(memdc)
+            except Exception:
+                pass
+        if hdc:
+            try:
+                user32.ReleaseDC(0, hdc)
+            except Exception:
+                pass
 
 
 def _grab_screen(region: Optional[Tuple[int, int, int, int]] = None):
@@ -294,9 +326,9 @@ def _grab_screen(region: Optional[Tuple[int, int, int, int]] = None):
     return ImageGrab.grab()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 1. SCREEN CAPTURE
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def capture(region: Optional[Tuple[int, int, int, int]] = None, save: bool = True, include_base64: bool = False) -> Dict[str, Any]:
     """
@@ -344,9 +376,9 @@ def capture(region: Optional[Tuple[int, int, int, int]] = None, save: bool = Tru
         }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 2. OCR (READ TEXT)
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def read_text(region: Optional[Tuple[int, int, int, int]] = None, detailed: bool = False) -> Dict[str, Any]:
     """
@@ -536,9 +568,9 @@ def screen_map(
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 3. FIND ON SCREEN (VISUAL GROUNDING)
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def find_on_screen(target: str, min_confidence: int = 30) -> Dict[str, Any]:
     """
@@ -616,9 +648,9 @@ def find_on_screen(target: str, min_confidence: int = 30) -> Dict[str, Any]:
         return {"success": False, "found": False, "error": str(e)}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 4. DESCRIBE SCREEN (MULTI-MODAL VISION)
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def describe(prompt: Optional[str] = None, region: Optional[Tuple[int, int, int, int]] = None) -> Dict[str, Any]:
     """
@@ -699,9 +731,9 @@ def describe(prompt: Optional[str] = None, region: Optional[Tuple[int, int, int,
         return {"success": False, "description": "", "error": str(e)}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 5. MOUSE & KEYBOARD INTERACTIONS
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def click(x: Optional[int] = None, y: Optional[int] = None, target: Optional[str] = None, click_type: str = "left") -> Dict[str, Any]:
     """
@@ -807,15 +839,26 @@ def get_screen_info() -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 6. UNIFIED OBSERVATION & ELEMENT RESOLUTION PIPELINE
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-def observe(save_annotated: bool = True, max_elements: int = 100) -> Dict[str, Any]:
+def observe(
+    save_annotated: bool = True,
+    max_elements: int = 100,
+    mode: str = "balanced",
+    compact: bool = False,
+) -> Dict[str, Any]:
     """Capture screen and build a unified observation with numbered UI elements.
     
     Synthesizes Windows UI Automation, tuned OCR, and computer vision cues.
     All elements are assigned sequential IDs for deterministic grounding.
+
+    Args:
+        save_annotated: Save and mark visual Set-of-Marks badges.
+        max_elements: Maximum elements to retain in the observation.
+        mode: Perception mode ('fast', 'balanced', 'deep').
+        compact: If True, serialize only concise fields for LLM token savings.
     """
     try:
         active_region = _ACTIVE_CANVAS_REGION
@@ -835,6 +878,7 @@ def observe(save_annotated: bool = True, max_elements: int = 100) -> Dict[str, A
             save_annotated=save_annotated,
             screenshots_dir=str(SHOTS_DIR),
             max_elements=max_elements,
+            mode=mode,
         )
 
         global _ACTIVE_TASK_SESSION
@@ -844,7 +888,7 @@ def observe(save_annotated: bool = True, max_elements: int = 100) -> Dict[str, A
             if obs.annotated_image_path:
                 _ACTIVE_TASK_SESSION.add_screenshot(obs.annotated_image_path)
 
-        res = obs.to_dict()
+        res = obs.to_dict(compact=compact)
         res["success"] = True
         return res
     except Exception as e:
@@ -920,17 +964,20 @@ def wait_for_text(target: str, timeout_s: float = 5.0) -> Dict[str, Any]:
     }
 
 
-def resolve_element_center(element_id: int) -> Optional[Tuple[int, int]]:
-    """Resolve element ID to physical center coordinates (cx, cy) from current observation."""
-    el = resolve_element(element_id)
+def resolve_element_center(
+    element_id: int,
+    observation_id: Optional[str] = None,
+) -> Optional[Tuple[int, int]]:
+    """Resolve element ID to physical center coordinates (cx, cy) from current or targeted observation."""
+    el = resolve_element(element_id, observation_id=observation_id)
     if el:
         return el.center
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 7. STANDALONE CLI INTERFACE
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def main():
@@ -1019,3 +1066,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -9,7 +9,8 @@ import logging
 import os
 import sys
 from contextlib import contextmanager
-from typing import Any, Dict, Optional, Tuple
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = os.path.dirname(__file__)
 sys.path.extend([os.path.join(ROOT, "Eyes"), os.path.join(ROOT, "Hands")])
@@ -86,11 +87,18 @@ class DesktopAgentController:
         save_annotated: bool = True,
         max_elements: int = 100,
         annotate: Optional[bool] = None,
+        mode: str = "balanced",
+        compact: bool = False,
     ) -> Dict[str, Any]:
         """Capture unified observation with numbered UI elements for LLM grounding."""
         if annotate is not None:
             save_annotated = annotate
-        return eyes.observe(save_annotated=save_annotated, max_elements=max_elements)
+        return eyes.observe(
+            save_annotated=save_annotated,
+            max_elements=max_elements,
+            mode=mode,
+            compact=compact,
+        )
 
     def zoom(
         self,
@@ -110,17 +118,22 @@ class DesktopAgentController:
         element_id: int,
         button: str = "left",
         clicks: int = 1,
+        observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Click an element by its observation ID without computing pixel coordinates."""
-        coords = eyes.resolve_element_center(element_id)
+        coords = eyes.resolve_element_center(element_id, observation_id=observation_id)
         if not coords:
-            return {"success": False, "error": f"Element ID {element_id} not found in active observation"}
+            return {"success": False, "error": f"Element ID {element_id} not found in observation"}
         cx, cy = coords
         return click(x=cx, y=cy, button=button, clicks=clicks)
 
-    def resolve_element_center(self, element_id: int) -> Optional[Tuple[int, int]]:
+    def resolve_element_center(
+        self,
+        element_id: int,
+        observation_id: Optional[str] = None,
+    ) -> Optional[Tuple[int, int]]:
         """Resolve element ID to physical screen center coordinates (cx, cy)."""
-        return eyes.resolve_element_center(element_id)
+        return eyes.resolve_element_center(element_id, observation_id=observation_id)
 
     def windows(self) -> Dict[str, Any]:
         return {
@@ -166,7 +179,7 @@ class DesktopAgentController:
         """Execute a key combination with natural human staggering (e.g. 'ctrl', 't')."""
         execute_hotkey(list(keys))
 
-    # ── Context Layer Integration ────────────────────────────────────────────
+    # â”€â”€ Context Layer Integration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def analyze_context(self, observation: Optional[Any] = None, goal: Optional[str] = None) -> Any:
         """Analyze current screen context, formulate situational rationale, and suggest next action."""
         if self.context is None:
@@ -211,5 +224,7 @@ class DesktopAgentController:
 if __name__ == "__main__":
     controller = DesktopAgentController()
     logger.info("%s", controller.screen_info())
+
+
 
 

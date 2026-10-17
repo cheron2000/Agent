@@ -1,4 +1,4 @@
-"""Windows window detection, focus, and activation management."""
+﻿"""Windows window detection, focus, and activation management."""
 
 import ctypes
 import re
@@ -81,6 +81,7 @@ def focus_window(title_or_hwnd: str | int) -> bool:
     if not hwnd or not win32gui.IsWindow(hwnd):
         return False
 
+    # Three-level fallback: full WinAPI -> SwitchToThisWindow only -> SetForegroundWindow
     try:
         # If minimized, restore it
         if win32gui.IsIconic(hwnd):
@@ -94,18 +95,19 @@ def focus_window(title_or_hwnd: str | int) -> bool:
         ctypes.windll.user32.SetFocus(hwnd)
         return True
     except Exception:
+        # Level 2: SwitchToThisWindow alone
         try:
             ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
             return True
         except Exception:
-            return False
+            pass
 
+    # Level 3: win32gui fallback
+    try:
+        win32gui.SetForegroundWindow(hwnd)
+        return True
     except Exception:
-        try:
-            win32gui.SetForegroundWindow(hwnd)
-            return True
-        except Exception:
-            return False
+        return False
 
 
 def get_active_window_title() -> str:
