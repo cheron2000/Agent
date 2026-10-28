@@ -45,6 +45,21 @@ pip install -e .\Hands
 
 Install the Tesseract OCR executable separately and ensure it is available on `PATH`. `Eyes/eyes.py` also checks common Windows Tesseract installation locations (`C:\Program Files\Tesseract-OCR\tesseract.exe`).
 
+## Running the Agent Server
+
+You can launch the authenticated local REST server (`agent_server.py` on port 8765) using the provided batch scripts:
+
+- **Start Server**: Double-click or run:
+  ```cmd
+  start_server.bat
+  ```
+- **Stop Server**: Double-click or run:
+  ```cmd
+  stop_server.bat
+  ```
+
+Tokens are auto-managed and written to `.agent_token`.
+
 ## Use from Python
 
 ### Grounded Element-by-ID (Recommended)

@@ -5,6 +5,7 @@ import logging
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Dict, List, Optional, Tuple
 from PIL import Image
@@ -141,6 +142,7 @@ def build_observation(
     max_elements: int = 100,
     mode: str = "balanced",
     offset: Tuple[int, int] = (0, 0),
+    save_raw: bool = True,
 ) -> Observation:
     """Capture and synthesize UIA, OCR, and visual cues into an Observation.
     
@@ -148,6 +150,10 @@ def build_observation(
     - 'fast': Screenshot + UIA only (bypasses OCR and CV for minimal latency).
     - 'balanced': Screenshot + UIA + OCR (CV fallback only if element count < 10).
     - 'deep': Comprehensive perception running UIA, full OCR, and full CV edge detection.
+
+    Args:
+        save_raw: If False, skip saving the raw screenshot to disk (saves ~40-120ms
+                  for transient observations used only for verification).
     """
     timer = StepTimer()
     timings: Dict[str, float] = {}
@@ -157,30 +163,60 @@ def build_observation(
     with timer.measure("hwnd"):
         hwnd = get_foreground_hwnd()
     
-    # 1. UIA Extraction Step
-    with timer.measure("uia"):
-        uia_elements = extract_uia_elements(hwnd=hwnd, max_elements=max_elements)
+    # ── Parallel Perception: UIA, OCR, and CV run concurrently ──────────
+    # These three sources operate on the same screenshot independently.
+    # Running them in parallel saves ~150-400ms per observe call.
 
-    # 2. OCR Extraction Step (Skipped in 'fast' mode)
+    uia_elements: List[UIElement] = []
     ocr_elements: List[UIElement] = []
-    with timer.measure("ocr"):
-        if mode in {"balanced", "deep"}:
-            ocr_elements = extract_ocr_elements(screen_image, use_cache=True, offset=offset)
-
-    # 3. CV Control Detection Step (Only in 'deep' mode, or 'balanced' when UI elements are sparse)
     cv_elements: List[UIElement] = []
-    with timer.measure("cv"):
-        if mode == "deep" or (mode == "balanced" and (len(uia_elements) + len(ocr_elements)) < 10):
+
+    run_ocr = mode in {"balanced", "deep"}
+    run_cv = mode == "deep"  # May also run in balanced-sparse, checked after merge
+
+    with timer.measure("perception_parallel"):
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            # 1. UIA always runs
+            uia_future = pool.submit(extract_uia_elements, hwnd=hwnd, max_elements=max_elements)
+
+            # 2. OCR runs in balanced and deep modes
+            ocr_future = None
+            if run_ocr:
+                ocr_future = pool.submit(extract_ocr_elements, screen_image, use_cache=True, offset=offset)
+
+            # 3. CV runs in deep mode (balanced-sparse fallback handled after)
+            cv_future = None
+            if run_cv:
+                cv_future = pool.submit(detect_visual_controls, screen_image, max_elements=50)
+
+            # Collect results
+            uia_elements = uia_future.result()
+            if ocr_future is not None:
+                ocr_elements = ocr_future.result()
+            if cv_future is not None:
+                cv_elements = cv_future.result()
+
+    # Record individual source timings from the parallel block
+    # The parallel block measures wall-clock time; individual source times overlap
+    timer.burst_times["uia"] = timer.burst_times.get("perception_parallel", 0.0)
+    timer.burst_times["ocr"] = timer.burst_times.get("perception_parallel", 0.0) if run_ocr else 0.0
+    timer.burst_times["cv"] = timer.burst_times.get("perception_parallel", 0.0) if run_cv else 0.0
+
+    # 3b. Balanced-sparse CV fallback: if combined UIA+OCR yielded very few elements
+    with timer.measure("cv_sparse_fallback"):
+        if not run_cv and mode == "balanced" and (len(uia_elements) + len(ocr_elements)) < 10:
             cv_elements = detect_visual_controls(screen_image, max_elements=50)
-            if offset != (0, 0):
-                for cv_el in cv_elements:
-                    cv_el.box = [
-                        cv_el.box[0] + offset[0],
-                        cv_el.box[1] + offset[1],
-                        cv_el.box[2] + offset[0],
-                        cv_el.box[3] + offset[1],
-                    ]
-                    cv_el.center = (cv_el.center[0] + offset[0], cv_el.center[1] + offset[1])
+
+    # Apply coordinate offset to CV elements
+    if cv_elements and offset != (0, 0):
+        for cv_el in cv_elements:
+            cv_el.box = [
+                cv_el.box[0] + offset[0],
+                cv_el.box[1] + offset[1],
+                cv_el.box[2] + offset[0],
+                cv_el.box[3] + offset[1],
+            ]
+            cv_el.center = (cv_el.center[0] + offset[0], cv_el.center[1] + offset[1])
 
     # 4. Deduplicate and Merge Step
     with timer.measure("dedup"):
@@ -199,7 +235,7 @@ def build_observation(
     annotated_path = None
 
     # 7. Screenshot Saving and Set-of-Marks Annotation Step
-    if screenshots_dir and os.path.exists(screenshots_dir):
+    if screenshots_dir and os.path.exists(screenshots_dir) and save_raw:
         with timer.measure("save_raw"):
             raw_path = os.path.join(screenshots_dir, f"{obs_id}.png")
             screen_image.save(raw_path)
@@ -212,13 +248,16 @@ def build_observation(
                 annotated_img.save(annotated_path)
 
     # Calculate burst times for each atomic step
-    timings["uia_burst_ms"] = timer.burst_times.get("uia", 0.0)
-    timings["uia_ms"] = timings["uia_burst_ms"]
+    parallel_ms = timer.burst_times.get("perception_parallel", 0.0)
+    cv_sparse_ms = timer.burst_times.get("cv_sparse_fallback", 0.0)
+    timings["perception_parallel_ms"] = parallel_ms
+    timings["uia_burst_ms"] = parallel_ms  # Individual times overlap; report parallel wall-clock
+    timings["uia_ms"] = parallel_ms
 
-    timings["ocr_burst_ms"] = timer.burst_times.get("ocr", 0.0)
+    timings["ocr_burst_ms"] = parallel_ms if run_ocr else 0.0
     timings["ocr_ms"] = timings["ocr_burst_ms"]
 
-    timings["cv_burst_ms"] = timer.burst_times.get("cv", 0.0)
+    timings["cv_burst_ms"] = (parallel_ms if run_cv else 0.0) + cv_sparse_ms
     timings["cv_ms"] = timings["cv_burst_ms"]
 
     timings["dedup_burst_ms"] = timer.burst_times.get("dedup", 0.0)

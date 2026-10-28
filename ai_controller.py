@@ -128,6 +128,7 @@ class DesktopAgentController:
         annotate: Optional[bool] = None,
         mode: str = "balanced",
         compact: bool = False,
+        save_raw: bool = True,
     ) -> Dict[str, Any]:
         """Capture unified observation with numbered UI elements for LLM grounding."""
         if annotate is not None:
@@ -137,6 +138,7 @@ class DesktopAgentController:
             max_elements=max_elements,
             mode=mode,
             compact=compact,
+            save_raw=save_raw,
         )
 
     def zoom(
@@ -277,7 +279,7 @@ class DesktopAgentController:
         if self.verifier is None:
             raise RuntimeError("ActionVerifier is not available.")
 
-        pre_obs = pre_observation if pre_observation is not None else self.observe(annotate=False)
+        pre_obs = pre_observation if pre_observation is not None else self.observe(annotate=False, mode="fast", save_raw=False)
         if hasattr(intent, "state"):
             intent.state = ActionState.DISPATCHED
 
@@ -330,7 +332,7 @@ class DesktopAgentController:
         time.sleep(0.3)
 
         # Fresh post-action observation
-        post_obs = self.observe(annotate=False)
+        post_obs = self.observe(annotate=False, mode="fast", save_raw=False)
 
         # Verify outcome against fresh evidence
         evidence = self.verifier.verify(intent, pre_obs, dispatch_result, post_obs)
@@ -368,6 +370,31 @@ class DesktopAgentController:
             raise RuntimeError("AutonomousGoalExecutor is not available.")
         res = self.goal_executor.execute_plan(plan)
         return res.to_dict()
+
+    def resume_goal(self, goal_id: str) -> Dict[str, Any]:
+        """Resume an existing persisted goal from SQLite checkpoint storage."""
+        if self.goal_executor is None:
+            raise RuntimeError("AutonomousGoalExecutor is not available.")
+        res = self.goal_executor.resume_goal(goal_id)
+        return res.to_dict()
+
+    def cancel_goal(self, goal_id: str) -> None:
+        """Signal cooperative cancellation for an in-flight or pending goal."""
+        if self.goal_executor is None:
+            raise RuntimeError("AutonomousGoalExecutor is not available.")
+        self.goal_executor.cancel_goal(goal_id)
+
+    def get_goal_status(self, goal_id: str) -> Optional[Dict[str, Any]]:
+        """Query latest execution status and checkpoint progress for a goal."""
+        if self.goal_executor is None or self.goal_executor.store is None:
+            raise RuntimeError("AutonomousGoalExecutor is not available.")
+        chk = self.goal_executor.store.get_latest_checkpoint(goal_id)
+        steps = self.goal_executor.store.get_plan_steps(goal_id)
+        return {
+            "goal_id": goal_id,
+            "latest_checkpoint": chk,
+            "steps": steps,
+        }
 
 
 if __name__ == "__main__":

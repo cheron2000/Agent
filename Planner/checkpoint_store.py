@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 import sqlite3
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 try:
     from .goal_schema import ExecutionPlan, PlanStep, StepExecutionState, GoalStatus
@@ -120,8 +120,66 @@ class SQLiteCheckpointStore:
             """)
             conn.commit()
 
-    def save_plan(self, plan: ExecutionPlan):
-        """Save initial execution plan and all its steps transactionally."""
+    def has_goal(self, goal_id: str) -> bool:
+        """Check whether a goal already exists in the store."""
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT 1 FROM goals WHERE goal_id = ? LIMIT 1;", (goal_id,)).fetchone()
+            return row is not None
+
+    def get_plan_steps(self, goal_id: str) -> Dict[str, Dict[str, Any]]:
+        """Fetch all recorded steps for a goal as a mapping from step_id to record dict."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT step_id, action_type, target_query, status, retry_count, error_message, updated_at
+                FROM plan_steps
+                WHERE goal_id = ?;
+                """,
+                (goal_id,),
+            )
+            return {row["step_id"]: dict(row) for row in cursor.fetchall()}
+
+    def get_completed_step_ids(self, goal_id: str) -> Set[str]:
+        """Fetch the set of step IDs that have been successfully verified and completed."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT step_id FROM plan_steps WHERE goal_id = ? AND status = 'completed';",
+                (goal_id,),
+            )
+            return {row["step_id"] for row in cursor.fetchall()}
+
+    def load_plan(self, goal_id: str) -> Optional[ExecutionPlan]:
+        """Load an execution plan from persistent storage with up-to-date step execution states."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT plan_json, status FROM goals WHERE goal_id = ?;",
+                (goal_id,),
+            ).fetchone()
+            if not row:
+                return None
+            plan_data = json.loads(row["plan_json"])
+            plan = ExecutionPlan.from_dict(plan_data)
+            plan.status = GoalStatus(row["status"])
+
+            # Overlay true persistent step states
+            step_rows = conn.execute(
+                "SELECT step_id, status, retry_count, error_message FROM plan_steps WHERE goal_id = ?;",
+                (goal_id,),
+            ).fetchall()
+            for sr in step_rows:
+                s = plan.get_step(sr["step_id"])
+                if s:
+                    s.status = StepExecutionState(sr["status"])
+                    s.retry_count = sr["retry_count"]
+                    s.error_message = sr["error_message"]
+            return plan
+
+    def save_plan(self, plan: ExecutionPlan, preserve_existing_states: bool = True):
+        """Save execution plan and all its steps transactionally.
+        
+        If preserve_existing_states=True, already recorded states (completed, dispatching, failed, compensated)
+        in SQLite are NEVER overwritten with default pending states on resume or restart.
+        """
         with self._get_connection() as conn:
             now = time.time()
             conn.execute(
@@ -139,7 +197,19 @@ class SQLiteCheckpointStore:
                 ),
             )
 
+            existing_steps = {}
+            if preserve_existing_states:
+                rows = conn.execute("SELECT step_id, status FROM plan_steps WHERE goal_id = ?;", (plan.goal_id,)).fetchall()
+                existing_steps = {r["step_id"]: r["status"] for r in rows}
+
             for step in plan.steps:
+                effective_status = step.status.value if isinstance(step.status, Enum) else str(step.status)
+                if preserve_existing_states and step.step_id in existing_steps:
+                    db_status = existing_steps[step.step_id]
+                    if db_status in ("completed", "dispatching", "failed", "compensated") and effective_status == "pending":
+                        effective_status = db_status
+                        step.status = StepExecutionState(db_status)
+
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO plan_steps (goal_id, step_id, action_type, target_query, status, retry_count, error_message, updated_at)
@@ -150,7 +220,7 @@ class SQLiteCheckpointStore:
                         step.step_id,
                         step.action_type,
                         step.target_query,
-                        step.status.value if isinstance(step.status, Enum) else str(step.status),
+                        effective_status,
                         step.retry_count,
                         step.error_message,
                         now,

@@ -11,8 +11,9 @@ Features:
 from dataclasses import dataclass, field
 from enum import Enum
 import logging
+import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 try:
     from .goal_schema import ExecutionPlan, PlanStep, StepExecutionState, GoalStatus, StepCompensation
@@ -28,6 +29,9 @@ except (ImportError, ValueError):
     from action_verifier import VerificationStatus
 
 logger = logging.getLogger("planner.goal_executor")
+
+# Global re-entrant lock to serialize desktop automation across goals and prevent concurrent device contention
+_DESKTOP_GOAL_LOCK = threading.RLock()
 
 
 @dataclass
@@ -65,6 +69,31 @@ class AutonomousGoalExecutor:
         self.orchestrator = orchestrator or ActionOrchestrator(dry_run=dry_run)
         self.store = store or SQLiteCheckpointStore()
         self.dry_run = dry_run
+        self._cancelled_goals: Set[str] = set()
+
+    def cancel_goal(self, goal_id: str):
+        """Signal cooperative cancellation for an in-flight or pending goal."""
+        self._cancelled_goals.add(goal_id)
+
+    def is_cancelled(self, goal_id: str) -> bool:
+        """Check whether cancellation was requested for a goal."""
+        return goal_id in self._cancelled_goals
+
+    def resume_goal(
+        self,
+        goal_id: str,
+        observe_fn: Optional[Callable[[], Dict[str, Any]]] = None,
+    ) -> GoalExecutionResult:
+        """Resume an existing goal loaded from persistent SQLite storage."""
+        plan = self.store.load_plan(goal_id)
+        if not plan:
+            return GoalExecutionResult(
+                goal_id=goal_id,
+                status=GoalStatus.FAILED,
+                completed_steps=[],
+                audit_trail=[{"error": f"Goal '{goal_id}' not found in checkpoint store"}],
+            )
+        return self.execute_plan(plan, observe_fn=observe_fn)
 
     def execute_plan(
         self,
@@ -72,116 +101,166 @@ class AutonomousGoalExecutor:
         observe_fn: Optional[Callable[[], Dict[str, Any]]] = None,
     ) -> GoalExecutionResult:
         """Execute all steps in an ExecutionPlan respecting DAG dependencies and checkpoint rules."""
-        start_t = time.perf_counter()
-        plan.status = GoalStatus.EXECUTING
+        with _DESKTOP_GOAL_LOCK:
+            start_t = time.perf_counter()
+            plan.status = GoalStatus.EXECUTING
 
-        # 1. Validate DAG
-        valid, err = plan.validate_dag()
-        if not valid:
-            plan.status = GoalStatus.FAILED
-            elapsed_ms = (time.perf_counter() - start_t) * 1000.0
-            return GoalExecutionResult(
-                goal_id=plan.goal_id,
-                status=GoalStatus.FAILED,
-                completed_steps=[],
-                failed_step=None,
-                wall_clock_ms=elapsed_ms,
-                audit_trail=[{"error": f"Invalid DAG plan: {err}"}],
-            )
-
-        # 2. Persist initial plan to SQLite store
-        self.store.save_plan(plan)
-
-        # 3. Crash Recovery Check: Reconcile any steps left stranded in DISPATCHING
-        crashed_steps = self.store.get_crashed_steps(plan.goal_id)
-        if crashed_steps:
-            logger.info("Found %d crashed step(s) in DISPATCHING; reconciling state", len(crashed_steps))
-            self._reconcile_crashed_steps(plan, crashed_steps, observe_fn=observe_fn)
-
-        completed_step_ids: List[str] = list(plan.get_completed_step_ids())
-        audit_trail: List[Dict[str, Any]] = []
-
-        # 4. Sequential execution loop
-        while True:
-            step = plan.get_next_eligible_step()
-            if not step:
-                # All steps completed or no more eligible steps
-                break
-
-            step_intent = self._step_to_intent(step)
-
-            # Protocol: Record durable DISPATCHING state BEFORE invoking hardware action
-            self.store.record_pre_dispatch(plan.goal_id, step.step_id, step_intent.to_dict())
-
-            # Execute step through ActionOrchestrator
-            orch_result = self.orchestrator.execute_step(
-                step_intent,
-                observe_fn=observe_fn,
-            )
-            audit_trail.append({"step_id": step.step_id, "result": orch_result})
-
-            # Record dispatch result in store
-            self.store.record_dispatch_result(
-                plan.goal_id,
-                step.step_id,
-                orch_result.get("dispatch_result", {}),
-            )
-
-            # Record verification outcome in store
-            verif_data = orch_result.get("verification", {})
-            status_str = verif_data.get("status", "failed")
-            self.store.record_verification(
-                plan.goal_id,
-                step.step_id,
-                status=status_str,
-                evidence_dict=verif_data,
-                recovery_dict=orch_result.get("recovery_decision"),
-            )
-
-            if orch_result.get("success", False):
-                step.status = StepExecutionState.COMPLETED
-                completed_step_ids.append(step.step_id)
-
-                # Persist durable checkpoint
-                self.store.save_checkpoint(
-                    goal_id=plan.goal_id,
-                    step_id=step.step_id,
-                    active_window=verif_data.get("details", {}).get("active_window", ""),
-                    observation_id=verif_data.get("details", {}).get("observation_id", ""),
-                    completed_steps=completed_step_ids,
-                )
-            else:
-                step.status = StepExecutionState.FAILED
-                step.error_message = verif_data.get("error_message", "Step failed verification")
-
-                # Step failed unrecoverably: trigger compensation pipeline
-                logger.warning("Step %s failed (%s); triggering compensatory rollback", step.step_id, step.error_message)
-                compensations_run = self._rollback_compensations(plan, completed_step_ids)
-                plan.status = GoalStatus.COMPENSATED if compensations_run else GoalStatus.FAILED
-                self.store.update_goal_status(plan.goal_id, plan.status)
-
+            # 1. Validate DAG
+            valid, err = plan.validate_dag()
+            if not valid:
+                plan.status = GoalStatus.FAILED
                 elapsed_ms = (time.perf_counter() - start_t) * 1000.0
                 return GoalExecutionResult(
                     goal_id=plan.goal_id,
-                    status=plan.status,
+                    status=GoalStatus.FAILED,
+                    completed_steps=[],
+                    failed_step=None,
+                    wall_clock_ms=elapsed_ms,
+                    audit_trail=[{"error": f"Invalid DAG plan: {err}"}],
+                )
+
+            # 2. Checkpoint recovery & crash check BEFORE saving:
+            # If this goal was previously started, load persisted step states and check for stranded DISPATCHING actions
+            if self.store.has_goal(plan.goal_id):
+                # Synchronize in-memory plan with already completed steps to PREVENT REPLAY
+                persisted_steps = self.store.get_plan_steps(plan.goal_id)
+                for step in plan.steps:
+                    if step.step_id in persisted_steps:
+                        p_status = persisted_steps[step.step_id]["status"]
+                        if p_status == "completed":
+                            step.status = StepExecutionState.COMPLETED
+                        elif p_status == "failed":
+                            step.status = StepExecutionState.FAILED
+                            step.error_message = persisted_steps[step.step_id].get("error_message")
+
+                # Query any step stranded in DISPATCHING from an unexpected process kill or restart
+                crashed_steps = self.store.get_crashed_steps(plan.goal_id)
+                if crashed_steps:
+                    logger.info("Found %d crashed step(s) in DISPATCHING; reconciling state", len(crashed_steps))
+                    self._reconcile_crashed_steps(plan, crashed_steps, observe_fn=observe_fn)
+
+            # 3. Persist plan to SQLite store (with preserve_existing_states=True)
+            self.store.save_plan(plan, preserve_existing_states=True)
+
+            # Initialize completed steps in plan order
+            completed_step_ids: List[str] = [s.step_id for s in plan.steps if s.status == StepExecutionState.COMPLETED]
+            audit_trail: List[Dict[str, Any]] = []
+
+            # 4. Sequential execution loop
+            while True:
+                if self.is_cancelled(plan.goal_id):
+                    logger.warning("Goal %s was cancelled by user; halting execution", plan.goal_id)
+                    plan.status = GoalStatus.ABORTED
+                    self.store.update_goal_status(plan.goal_id, GoalStatus.ABORTED)
+                    elapsed_ms = (time.perf_counter() - start_t) * 1000.0
+                    return GoalExecutionResult(
+                        goal_id=plan.goal_id,
+                        status=GoalStatus.ABORTED,
+                        completed_steps=completed_step_ids,
+                        wall_clock_ms=elapsed_ms,
+                        audit_trail=audit_trail,
+                    )
+
+                step = plan.get_next_eligible_step()
+                if not step:
+                    # All steps completed or no more eligible steps
+                    break
+
+                step_intent = self._step_to_intent(step)
+
+                # Protocol: Record durable DISPATCHING state BEFORE invoking hardware action
+                self.store.record_pre_dispatch(plan.goal_id, step.step_id, step_intent.to_dict())
+
+                # Execute step through ActionOrchestrator
+                orch_result = self.orchestrator.execute_step(
+                    step_intent,
+                    observe_fn=observe_fn,
+                )
+                audit_trail.append({"step_id": step.step_id, "result": orch_result})
+
+                # Record dispatch result in store
+                self.store.record_dispatch_result(
+                    plan.goal_id,
+                    step.step_id,
+                    orch_result.get("dispatch_result", {}),
+                )
+
+                # Record verification outcome in store
+                verif_data = orch_result.get("verification", {})
+                status_str = verif_data.get("status", "failed")
+                self.store.record_verification(
+                    plan.goal_id,
+                    step.step_id,
+                    status=status_str,
+                    evidence_dict=verif_data,
+                    recovery_dict=orch_result.get("recovery_decision"),
+                )
+
+                if orch_result.get("success", False):
+                    step.status = StepExecutionState.COMPLETED
+                    completed_step_ids.append(step.step_id)
+
+                    # Persist durable checkpoint
+                    self.store.save_checkpoint(
+                        goal_id=plan.goal_id,
+                        step_id=step.step_id,
+                        active_window=verif_data.get("details", {}).get("active_window", ""),
+                        observation_id=verif_data.get("details", {}).get("observation_id", ""),
+                        completed_steps=completed_step_ids,
+                    )
+                else:
+                    step.status = StepExecutionState.FAILED
+                    step.error_message = verif_data.get("error_message", "Step failed verification")
+
+                    # Step failed unrecoverably: trigger compensation pipeline
+                    logger.warning("Step %s failed (%s); triggering compensatory rollback", step.step_id, step.error_message)
+                    compensations_run, all_succeeded = self._rollback_compensations(plan, completed_step_ids)
+                    if compensations_run and all_succeeded:
+                        plan.status = GoalStatus.COMPENSATED
+                    elif compensations_run and not all_succeeded:
+                        plan.status = GoalStatus.COMPENSATION_FAILED
+                    else:
+                        plan.status = GoalStatus.FAILED
+                    self.store.update_goal_status(plan.goal_id, plan.status)
+
+                    elapsed_ms = (time.perf_counter() - start_t) * 1000.0
+                    return GoalExecutionResult(
+                        goal_id=plan.goal_id,
+                        status=plan.status,
+                        completed_steps=completed_step_ids,
+                        failed_step=step.step_id,
+                        compensations_executed=compensations_run,
+                        wall_clock_ms=elapsed_ms,
+                        audit_trail=audit_trail,
+                    )
+
+            # Check if all steps in plan actually completed
+            all_completed = all(s.status == StepExecutionState.COMPLETED for s in plan.steps)
+            if not all_completed:
+                failed_step = next((s.step_id for s in plan.steps if s.status == StepExecutionState.FAILED), None)
+                plan.status = GoalStatus.FAILED
+                self.store.update_goal_status(plan.goal_id, GoalStatus.FAILED)
+                elapsed_ms = (time.perf_counter() - start_t) * 1000.0
+                return GoalExecutionResult(
+                    goal_id=plan.goal_id,
+                    status=GoalStatus.FAILED,
                     completed_steps=completed_step_ids,
-                    failed_step=step.step_id,
-                    compensations_executed=compensations_run,
+                    failed_step=failed_step,
                     wall_clock_ms=elapsed_ms,
                     audit_trail=audit_trail,
                 )
 
-        # All steps successfully completed
-        plan.status = GoalStatus.COMPLETED
-        self.store.update_goal_status(plan.goal_id, GoalStatus.COMPLETED)
-        elapsed_ms = (time.perf_counter() - start_t) * 1000.0
-        return GoalExecutionResult(
-            goal_id=plan.goal_id,
-            status=GoalStatus.COMPLETED,
-            completed_steps=completed_step_ids,
-            wall_clock_ms=elapsed_ms,
-            audit_trail=audit_trail,
-        )
+            # All steps successfully completed
+            plan.status = GoalStatus.COMPLETED
+            self.store.update_goal_status(plan.goal_id, GoalStatus.COMPLETED)
+            elapsed_ms = (time.perf_counter() - start_t) * 1000.0
+            return GoalExecutionResult(
+                goal_id=plan.goal_id,
+                status=GoalStatus.COMPLETED,
+                completed_steps=completed_step_ids,
+                wall_clock_ms=elapsed_ms,
+                audit_trail=audit_trail,
+            )
 
     def _step_to_intent(self, step: PlanStep) -> ActionIntent:
         """Convert a PlanStep into a typed ActionIntent with ActionExpectation."""
@@ -256,9 +335,13 @@ class AutonomousGoalExecutor:
         self,
         plan: ExecutionPlan,
         completed_step_ids: List[str],
-    ) -> List[str]:
-        """Execute compensations in reverse order for completed reversible steps."""
+    ) -> Tuple[List[str], bool]:
+        """Execute compensations in reverse order for completed reversible steps.
+        
+        Returns (executed_step_ids, all_compensations_succeeded).
+        """
         executed_compensations: List[str] = []
+        all_succeeded = True
         plan.status = GoalStatus.COMPENSATING
 
         # Reverse chronological order
@@ -280,6 +363,8 @@ class AutonomousGoalExecutor:
             res = self.orchestrator.execute_step(comp_intent)
             comp.executed = True
             comp.success = res.get("success", False)
+            if not comp.success:
+                all_succeeded = False
 
             self.store.record_compensation(
                 goal_id=plan.goal_id,
@@ -291,4 +376,4 @@ class AutonomousGoalExecutor:
             )
             executed_compensations.append(sid)
 
-        return executed_compensations
+        return executed_compensations, all_succeeded

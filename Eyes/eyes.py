@@ -860,6 +860,7 @@ def observe(
     max_elements: int = 100,
     mode: str = "balanced",
     compact: bool = False,
+    save_raw: bool = True,
 ) -> Dict[str, Any]:
     """Capture screen and build a unified observation with numbered UI elements.
     
@@ -871,6 +872,8 @@ def observe(
         max_elements: Maximum elements to retain in the observation.
         mode: Perception mode ('fast', 'balanced', 'deep').
         compact: If True, serialize only concise fields for LLM token savings.
+        save_raw: If False, skip saving raw/annotated screenshots to disk.
+                  Use for transient observations (verification, polling).
     """
     try:
         active_region = _ACTIVE_CANVAS_REGION
@@ -890,11 +893,12 @@ def observe(
         obs = build_observation(
             screen_image=screenshot,
             active_window_title=active_win or "Active Desktop",
-            save_annotated=save_annotated,
-            screenshots_dir=str(SHOTS_DIR),
+            save_annotated=save_annotated if save_raw else False,
+            screenshots_dir=str(SHOTS_DIR) if save_raw else None,
             max_elements=max_elements,
             mode=mode,
             offset=offset,
+            save_raw=save_raw,
         )
 
         global _ACTIVE_TASK_SESSION

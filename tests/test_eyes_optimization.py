@@ -282,7 +282,7 @@ def test_desktop_controller_api_compatibility():
         # Test observe with mode and compact kwargs
         res = controller.observe(mode="fast", compact=True)
         assert res["success"] is True
-        mock_obs.assert_called_with(save_annotated=True, max_elements=100, mode="fast", compact=True)
+        mock_obs.assert_called_with(save_annotated=True, max_elements=100, mode="fast", compact=True, save_raw=True)
 
         # Test click_element with observation_id
         click_res = controller.click_element(1, observation_id="obs_ctrl_1")

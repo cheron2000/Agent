@@ -218,3 +218,129 @@ def test_crash_reconciliation_aborts_non_idempotent_action(executor):
     result = executor.execute_plan(plan, observe_fn=lambda: fresh_obs)
     assert result.status == GoalStatus.FAILED
     assert result.failed_step == "s1"
+
+
+def test_crash_consistency_restart_prevents_replay_and_reconciles_dispatching(temp_db):
+    """Verify that restarting the executor against the same SQLite database:
+    1. Detects stranded DISPATCHING steps.
+    2. Does NOT replay already COMPLETED steps.
+    3. Reconciles DISPATCHING into COMPLETED when UI evidence matches.
+    """
+    store1 = SQLiteCheckpointStore(db_path=temp_db)
+    orch1 = ActionOrchestrator(dry_run=True)
+    exec1 = AutonomousGoalExecutor(orchestrator=orch1, store=store1, dry_run=True)
+
+    plan = ExecutionPlan(
+        goal_id="g_crash_restart_1",
+        instruction="Multi-step across restart",
+        steps=[
+            PlanStep(step_id="s1", action_type="focus_window", expected_window_title="Settings"),
+            PlanStep(step_id="s2", action_type="click", dependencies=["s1"], expected_text="System"),
+            PlanStep(step_id="s3", action_type="type_text", parameters={"text": "Display"}, dependencies=["s2"], expected_text="Display Settings"),
+        ],
+    )
+    # 1. Step 1 executes and completes in instance 1
+    exec1.store.save_plan(plan)
+    exec1.store.record_pre_dispatch(plan.goal_id, "s1", {})
+    exec1.store.record_verification(plan.goal_id, "s1", "completed", {"status": "confirmed"})
+    exec1.store.save_checkpoint(plan.goal_id, "s1", "Settings", "obs_1", ["s1"])
+
+    # 2. Step 2 enters DISPATCHING, and then simulated crash / process termination happens
+    exec1.store.record_pre_dispatch(plan.goal_id, "s2", {"target": "System"})
+
+    # Drop instance 1 completely to simulate process death
+    del exec1
+    del orch1
+    del store1
+
+    # 3. Instance 2 starts up fresh against the same persistent database
+    store2 = SQLiteCheckpointStore(db_path=temp_db)
+    replayed_steps = []
+
+    def mock_orch_step(intent, observe_fn=None, pre_observation=None):
+        step_id = intent.intent_id.split("_")[0]
+        replayed_steps.append(step_id)
+        return {
+            "success": True,
+            "verification": {"status": "confirmed", "details": {"active_window": "Settings", "observation_id": f"obs_{step_id}"}},
+        }
+
+    mock_orch = ActionOrchestrator(dry_run=True)
+    mock_orch.execute_step = mock_orch_step
+
+    exec2 = AutonomousGoalExecutor(orchestrator=mock_orch, store=store2, dry_run=True)
+
+    # Fresh UI evidence when instance 2 wakes up: proves step 2 already happened (text "System" is present)
+    fresh_ui = {"active_window": "Settings", "text": "System Options"}
+
+    # Resume goal
+    result = exec2.resume_goal("g_crash_restart_1", observe_fn=lambda: fresh_ui)
+
+    assert result.status == GoalStatus.COMPLETED
+    assert result.completed_steps == ["s1", "s2", "s3"]
+    # CRITICAL: s1 and s2 must NOT have been dispatched through mock_orch because s1 was completed and s2 was reconciled!
+    assert "s1" not in replayed_steps
+    assert "s2" not in replayed_steps
+    # Only s3 should have been executed by the fresh executor
+    assert "s3" in replayed_steps
+
+
+def test_failed_compensation_does_not_produce_false_compensated(temp_db):
+    """When a step fails and its compensation ALSO fails, goal status must be COMPENSATION_FAILED, not COMPENSATED."""
+    store = SQLiteCheckpointStore(db_path=temp_db)
+
+    class FailingCompOrchestrator(ActionOrchestrator):
+        def execute_step(self, intent, observe_fn=None, pre_observation=None):
+            # If compensation action, fail it!
+            if intent.intent_id.startswith("comp_"):
+                return {"success": False, "error": "Hardware input locked"}
+            # Step 1 succeeds
+            if "s1" in intent.intent_id:
+                return {"success": True, "verification": {"status": "confirmed"}}
+            # Step 2 fails
+            return {"success": False, "verification": {"status": "failed", "error_message": "Element not found"}}
+
+    orch = FailingCompOrchestrator(dry_run=True)
+    executor = AutonomousGoalExecutor(orchestrator=orch, store=store, dry_run=True)
+
+    plan = ExecutionPlan(
+        goal_id="g_comp_fail",
+        instruction="Test failed compensation semantics",
+        steps=[
+            PlanStep(
+                step_id="s1",
+                action_type="click",
+                expected_text="Done",
+                compensation=StepCompensation(
+                    action_type="press_key",
+                    parameters={"key": "esc"},
+                    is_reversible=True,
+                ),
+            ),
+            PlanStep(
+                step_id="s2",
+                action_type="click",
+                dependencies=["s1"],
+                expected_text="Submit",
+            ),
+        ],
+    )
+
+    result = executor.execute_plan(plan)
+    assert result.status == GoalStatus.COMPENSATION_FAILED
+    assert result.failed_step == "s2"
+    assert "s1" in result.compensations_executed
+
+
+def test_goal_cooperative_cancellation(executor):
+    """A goal can be cooperatively cancelled, resulting in ABORTED status."""
+    plan = ExecutionPlan(
+        goal_id="g_cancel_test",
+        instruction="Cancellation test",
+        steps=[
+            PlanStep(step_id="s1", action_type="focus_window", expected_window_title="Desktop"),
+        ],
+    )
+    executor.cancel_goal(plan.goal_id)
+    result = executor.execute_plan(plan)
+    assert result.status == GoalStatus.ABORTED

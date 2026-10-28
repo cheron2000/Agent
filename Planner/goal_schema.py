@@ -21,6 +21,7 @@ class GoalStatus(str, Enum):
     FAILED = "failed"
     COMPENSATING = "compensating"
     COMPENSATED = "compensated"
+    COMPENSATION_FAILED = "compensation_failed"
     ABORTED = "aborted"
 
 
@@ -53,6 +54,17 @@ class StepCompensation:
             "executed": self.executed,
             "success": self.success,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "StepCompensation":
+        return cls(
+            action_type=data.get("action_type", ""),
+            parameters=data.get("parameters", {}),
+            description=data.get("description", ""),
+            is_reversible=data.get("is_reversible", True),
+            executed=data.get("executed", False),
+            success=data.get("success"),
+        )
 
 
 @dataclass
@@ -94,6 +106,35 @@ class PlanStep:
             "error_message": self.error_message,
             "metadata": self.metadata,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PlanStep":
+        comp = None
+        if data.get("compensation"):
+            comp = StepCompensation.from_dict(data["compensation"])
+        raw_status = data.get("status", StepExecutionState.PENDING)
+        if isinstance(raw_status, str):
+            status = StepExecutionState(raw_status)
+        else:
+            status = raw_status
+        return cls(
+            step_id=data["step_id"],
+            action_type=data.get("action_type", ""),
+            target_query=data.get("target_query"),
+            parameters=data.get("parameters", {}),
+            dependencies=list(data.get("dependencies", [])),
+            expected_window_title=data.get("expected_window_title"),
+            expected_text=data.get("expected_text"),
+            disallowed_text=data.get("disallowed_text"),
+            risk_level=data.get("risk_level", "safe_repeatable"),
+            timeout_s=float(data.get("timeout_s", 10.0)),
+            status=status,
+            compensation=comp,
+            retries_allowed=int(data.get("retries_allowed", 1)),
+            retry_count=int(data.get("retry_count", 0)),
+            error_message=data.get("error_message"),
+            metadata=data.get("metadata", {}),
+        )
 
 
 @dataclass
@@ -171,3 +212,20 @@ class ExecutionPlan:
             "updated_at": self.updated_at,
             "metadata": self.metadata,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ExecutionPlan":
+        raw_status = data.get("status", GoalStatus.PENDING)
+        if isinstance(raw_status, str):
+            status = GoalStatus(raw_status)
+        else:
+            status = raw_status
+        return cls(
+            goal_id=data["goal_id"],
+            instruction=data.get("instruction", ""),
+            steps=[PlanStep.from_dict(s) for s in data.get("steps", [])],
+            status=status,
+            created_at=float(data.get("created_at", time.time())),
+            updated_at=float(data.get("updated_at", time.time())),
+            metadata=data.get("metadata", {}),
+        )
