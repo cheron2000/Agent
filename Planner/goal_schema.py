@@ -10,7 +10,7 @@ Provides:
 from dataclasses import dataclass, field
 from enum import Enum
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 class GoalStatus(str, Enum):
