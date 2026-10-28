@@ -1,4 +1,4 @@
-﻿"""Parallel Desktop Server — Playwright-backed canvas automation REST API.
+"""Parallel Desktop Server — Playwright-backed canvas automation REST API.
 
 FastAPI service on port 8766 that drives an async Playwright browser canvas.
 This is the canvas/Playwright counterpart to agent_server.py (which drives the

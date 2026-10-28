@@ -1,4 +1,4 @@
-﻿"""Windows window detection, focus, and activation management."""
+"""Windows window detection, focus, and activation management."""
 
 import ctypes
 import re

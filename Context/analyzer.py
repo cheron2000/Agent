@@ -1,4 +1,4 @@
-﻿"""Context reasoning and situational decision analyzer."""
+"""Context reasoning and situational decision analyzer."""
 
 from typing import Any, Dict, List, Optional, Tuple
 
