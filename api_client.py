@@ -9,7 +9,9 @@ from typing import Any, Dict, List, Literal, Optional
 
 import requests
 
-BASE_URL = "http://127.0.0.1:8765"
+from config.settings import settings
+
+BASE_URL = settings.api_base_url
 
 
 class DesktopAgentClient:

@@ -19,6 +19,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, model_validator
 import uvicorn
 
+from config.settings import settings
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 if os.path.join(ROOT, "Eyes") not in sys.path:
     sys.path.insert(0, os.path.join(ROOT, "Eyes"))
@@ -44,7 +46,7 @@ except ImportError as err:
     from agent_hands.engine import TypingEngine
     from agent_hands.windows import focus_window, get_active_window_title, list_windows
 
-SERVER_PORT = 8765
+SERVER_PORT = settings.server_port
 logger = logging.getLogger("agent_server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -126,10 +128,7 @@ app = FastAPI(
 @app.middleware("http")
 async def validate_host_header(request: Request, call_next):
     raw_host = request.headers.get("host", "").split(":")[0].strip().lower()
-    allowed_hosts = {"127.0.0.1", "localhost", "testserver"}
-    extra_hosts = os.environ.get("ALLOWED_HOSTS", "")
-    if extra_hosts:
-        allowed_hosts.update(h.strip().lower() for h in extra_hosts.split(",") if h.strip())
+    allowed_hosts = set(settings.allowed_hosts)
 
     if raw_host not in allowed_hosts:
         return Response(
@@ -142,7 +141,7 @@ async def validate_host_header(request: Request, call_next):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8765", "http://localhost:8765"],
+    allow_origins=list(settings.cors_origins),
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Agent-Token"],
 )
@@ -447,7 +446,7 @@ def run_server(port: int = SERVER_PORT) -> None:
     token = get_current_token()
     logger.info("Starting Windows Desktop Agent on http://127.0.0.1:%d", port)
     logger.info("Bearer Token configured (check .agent_token or pass via AGENT_AUTH_TOKEN)")
-    uvicorn.run(app, host="127.0.0.1", port=port)
+    uvicorn.run(app, host=settings.server_host, port=port)
 
 
 if __name__ == "__main__":
