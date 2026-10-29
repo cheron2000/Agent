@@ -444,7 +444,7 @@ def hands_click_element(req: ClickElementRequest, _: str = Depends(verify_auth))
 
 def run_server(port: int = SERVER_PORT) -> None:
     token = get_current_token()
-    logger.info("Starting Windows Desktop Agent on http://127.0.0.1:%d", port)
+    logger.info("Starting Windows Desktop Agent on http://%s:%d", settings.server_host, port)
     logger.info("Bearer Token configured (check .agent_token or pass via AGENT_AUTH_TOKEN)")
     uvicorn.run(app, host=settings.server_host, port=port)
 
