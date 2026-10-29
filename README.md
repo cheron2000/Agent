@@ -15,6 +15,10 @@ An agent operates the actual desktop you are using:
 > [!TIP]
 > **New AI Agent?** Read **[AGENTS.md](AGENTS.md)** first! It details the core **Observe → Reason → Act → Verify** loop, how to use `DesktopAgentController` without editing any code, and how to execute tasks using the Atomic Step Task Planner.
 
+## Project structure
+
+Runtime settings are centralized in `config/settings.py`. The current API entry point remains `agent_server.py` while route and service extraction is planned as a compatibility-preserving migration. See [the refactoring roadmap](docs/REFACTORING_PLAN.md) for target module boundaries and acceptance criteria.
+
 ## Architecture
 
 ```text
@@ -41,7 +45,10 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 pip install -e .\Hands
+Copy-Item .env.example .env
 ```
+
+Edit `.env` for local settings such as server port, client base URL, allowed hosts, and CORS origins. Keep real credentials out of Git. If you do not create `.env`, existing localhost defaults are used.
 
 Install the Tesseract OCR executable separately and ensure it is available on `PATH`. `Eyes/eyes.py` also checks common Windows Tesseract installation locations (`C:\Program Files\Tesseract-OCR\tesseract.exe`).
 
