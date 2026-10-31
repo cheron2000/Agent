@@ -55,14 +55,18 @@ if ($ExistingConn) {
 }
 
 # 3. Launch server
-$ServerScript = Join-Path $RootDir "agent_server.py"
+$ServerScript = "agent_server.py"
 
 if ($Background) {
     Write-Host "[INFO] Launching Desktop Agent Server in the background..." -ForegroundColor Cyan
-    $proc = Start-Process -FilePath $PythonBin -ArgumentList "`"$ServerScript`"" -WorkingDirectory $RootDir -PassThru
+    $proc = Start-Process -FilePath $PythonBin -ArgumentList "agent_server.py" -WorkingDirectory $RootDir -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds 3
-    Write-Host "[OK] Server started in background (PID: $($proc.Id)) on http://127.0.0.1:$Port" -ForegroundColor Green
-    Write-Host "[INFO] To stop the server at any time, run 'stop_server.bat'." -ForegroundColor Gray
+    if (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue) {
+        Write-Host "[OK] Server started in background (PID: $($proc.Id)) on http://127.0.0.1:$Port" -ForegroundColor Green
+        Write-Host "[INFO] To stop the server at any time, run 'stop_server.bat'." -ForegroundColor Gray
+    } else {
+        Write-Host "[ERROR] Server process failed to stay running." -ForegroundColor Red
+    }
 } else {
     Write-Host "[INFO] Starting Desktop Agent Server on http://127.0.0.1:$Port..." -ForegroundColor Cyan
     Write-Host "[INFO] Auth Token is saved in: $(Join-Path $RootDir '.agent_token')" -ForegroundColor Gray
