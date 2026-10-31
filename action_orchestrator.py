@@ -16,6 +16,7 @@ Guarantees:
 from dataclasses import dataclass, field
 import logging
 import time
+import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
@@ -173,7 +174,7 @@ class ActionOrchestrator:
         elif self.controller and hasattr(self.controller, "observe"):
             pre_obs = self.controller.observe(annotate=False)
         else:
-            pre_obs = {"observation_id": f"obs_{time.time()}", "timestamp": time.time()}
+            pre_obs = {"observation_id": f"obs_{uuid.uuid4().hex}", "timestamp": time.time()}
 
         # Freshness Gate: check observation TTL
         obs_age = time.time() - pre_obs.get("timestamp", time.time())
@@ -223,7 +224,7 @@ class ActionOrchestrator:
                 time.sleep(0.2)
                 post_obs = self.controller.observe(annotate=False)
             else:
-                post_obs = {"observation_id": f"obs_{time.time()}", "timestamp": time.time()}
+                post_obs = {"observation_id": f"obs_{uuid.uuid4().hex}", "timestamp": time.time()}
 
             # 4. Verify outcome
             evidence = self.verifier.verify(intent, pre_obs, dispatch_res, post_obs)
