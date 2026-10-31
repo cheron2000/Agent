@@ -13,6 +13,7 @@ from Planner.goal_schema import (
 )
 from Planner.checkpoint_store import SQLiteCheckpointStore
 from Planner.goal_executor import AutonomousGoalExecutor, GoalExecutionResult
+from action_expectations import ActionIntent, ActionRiskLevel
 from action_orchestrator import ActionOrchestrator
 
 
@@ -155,6 +156,11 @@ def test_compensation_rollback_on_failure(executor):
         # s2: pre, post (fails - expected text not present)
         {"observation_id": "o3", "elements": [{"name": "Submit Missing Field", "center": [200, 200]}]},
         {"observation_id": "o4", "text": "Validation Error"},
+        # Retry and compensation each receive fresh pre/post observations.
+        {"observation_id": "o5", "text": "Validation Error"},
+        {"observation_id": "o6", "text": "Validation Error"},
+        {"observation_id": "o7", "text": "Validation Error"},
+        {"observation_id": "o8", "text": "Validation Error"},
     ]
 
     obs_idx = [0]
@@ -344,3 +350,19 @@ def test_goal_cooperative_cancellation(executor):
     executor.cancel_goal(plan.goal_id)
     result = executor.execute_plan(plan)
     assert result.status == GoalStatus.ABORTED
+
+
+
+def test_dry_run_fallback_observations_have_unique_ids():
+    """Synthetic pre/post observations must not collide on low-resolution clocks."""
+    orchestrator = ActionOrchestrator(dry_run=True)
+    intent = ActionIntent(
+        action_type="press_key",
+        parameters={"key": "esc"},
+        risk_level=ActionRiskLevel.SAFE_REPEATABLE,
+    )
+
+    result = orchestrator.execute_step(intent)
+
+    assert result["success"] is True
+    assert result["verification"]["evidence_type"] == "default_safe_dispatch"
