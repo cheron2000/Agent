@@ -13,6 +13,7 @@ from Planner.goal_schema import (
 )
 from Planner.checkpoint_store import SQLiteCheckpointStore
 from Planner.goal_executor import AutonomousGoalExecutor, GoalExecutionResult
+from action_expectations import ActionIntent, ActionRiskLevel
 from action_orchestrator import ActionOrchestrator
 
 
@@ -344,3 +345,18 @@ def test_goal_cooperative_cancellation(executor):
     executor.cancel_goal(plan.goal_id)
     result = executor.execute_plan(plan)
     assert result.status == GoalStatus.ABORTED
+
+
+def test_dry_run_fallback_observations_are_not_misclassified_as_stale():
+    """Synthetic pre/post observations must have distinct IDs even on low-resolution clocks."""
+    orchestrator = ActionOrchestrator(dry_run=True)
+    intent = ActionIntent(
+        action_type="press_key",
+        parameters={"key": "esc"},
+        risk_level=ActionRiskLevel.SAFE_REPEATABLE,
+    )
+
+    result = orchestrator.execute_step(intent)
+
+    assert result["success"] is True
+    assert result["verification"]["evidence_type"] == "default_safe_dispatch"
