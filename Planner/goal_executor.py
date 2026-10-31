@@ -214,7 +214,7 @@ class AutonomousGoalExecutor:
 
                     # Step failed unrecoverably: trigger compensation pipeline
                     logger.warning("Step %s failed (%s); triggering compensatory rollback", step.step_id, step.error_message)
-                    compensations_run, all_succeeded = self._rollback_compensations(plan, completed_step_ids)
+                    compensations_run, all_succeeded = self._rollback_compensations(plan, completed_step_ids, observe_fn=observe_fn)
                     if compensations_run and all_succeeded:
                         plan.status = GoalStatus.COMPENSATED
                     elif compensations_run and not all_succeeded:
@@ -335,6 +335,7 @@ class AutonomousGoalExecutor:
         self,
         plan: ExecutionPlan,
         completed_step_ids: List[str],
+        observe_fn: Optional[Callable[[], Dict[str, Any]]] = None,
     ) -> Tuple[List[str], bool]:
         """Execute compensations in reverse order for completed reversible steps.
         
@@ -360,7 +361,7 @@ class AutonomousGoalExecutor:
                 risk_level=ActionRiskLevel.SAFE_REPEATABLE,
             )
 
-            res = self.orchestrator.execute_step(comp_intent)
+            res = self.orchestrator.execute_step(comp_intent, observe_fn=observe_fn)
             comp.executed = True
             comp.success = res.get("success", False)
             if not comp.success:
