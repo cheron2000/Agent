@@ -390,7 +390,7 @@ class SQLiteCheckpointStore:
                 SELECT checkpoint_id, goal_id, step_id, active_window, observation_id, completed_steps, metadata_json, timestamp
                 FROM checkpoints
                 WHERE goal_id = ?
-                ORDER BY timestamp DESC
+                ORDER BY timestamp DESC, rowid DESC
                 LIMIT 1;
                 """,
                 (goal_id,),
